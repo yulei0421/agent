@@ -36,8 +36,8 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
           placeholder={placeholder}
         />
         <div className="web-search-control">
-          <span className="web-search-toggle">自动联网</span>
-          <p>时效问题将调用固定数据源；结果仅作参考，不能当作已验证事实。</p>
+          <span className="web-search-toggle">模型工具</span>
+          <p>模型会在需要时调用受限工具；每次调用及结果都会显示在回答下方。</p>
         </div>
         <div className="composer-actions">
           <button type="button" onClick={onStop} disabled={!streaming}>停止生成</button>

@@ -30,6 +30,36 @@ test('publishes the four model tools with closed object schemas in a stable orde
   ]);
 });
 
+test('uses one field contract for published schemas and execution validation', async () => {
+  const calls = [];
+  const registry = createToolRegistry({
+    liveContext: async () => { calls.push('get_weather'); return { ok: true }; },
+    webSearch: async () => { calls.push('search_news'); return { ok: true }; },
+    assetSearch: async () => { calls.push('search_asset'); return [{ market: 'cn' }]; },
+    marketGateway: { getQuote: async () => { calls.push('get_quote'); return { ok: true, data: {}, meta: {} }; } }
+  });
+
+  const callsByTool = {
+    get_weather: {},
+    search_news: { query: '新闻' },
+    search_asset: { query: '资产' },
+    get_quote: { symbol: 'AAPL' }
+  };
+  const fieldsByTool = {
+    get_weather: ['city'],
+    search_news: ['query'],
+    search_asset: ['query'],
+    get_quote: ['symbol']
+  };
+  for (const definition of registry.definitions()) {
+    const { name, parameters } = definition.function;
+    assert.deepEqual(Object.keys(parameters.properties), fieldsByTool[name]);
+    const result = await registry.execute({ name, arguments: JSON.stringify(callsByTool[name]) });
+    assert.equal(result.ok, true);
+  }
+  assert.deepEqual(calls, ['get_weather', 'search_news', 'search_asset', 'get_quote']);
+});
+
 test('executes weather with contextual IP and clock while returning safe weather data', async () => {
   const calls = [];
   const registryNow = () => new Date('2026-07-20T00:00:00.000Z');
@@ -44,6 +74,7 @@ test('executes weather with contextual IP and clock while returning safe weather
         weather,
         location: '上海',
         date: '2026-07-20',
+        serverTime: '2026-07-20T01:00:00.000Z',
         ip: '203.0.113.10',
         url: 'https://internal.example/weather'
       };
@@ -63,7 +94,12 @@ test('executes weather with contextual IP and clock while returning safe weather
   assert.deepEqual(result, {
     ok: true,
     name: 'get_weather',
-    result: { weather, location: '上海', date: '2026-07-20' }
+    result: {
+      weather,
+      location: '上海',
+      date: '2026-07-20',
+      serverTime: '2026-07-20T01:00:00.000Z'
+    }
   });
 });
 
@@ -176,6 +212,11 @@ test('executes search_news with its adapter clock and returns sanitized news dat
             title: 'https://private.example/headline',
             publisher: '203.0.113.10',
             publishedAt: '2026-07-20T00:00:00.000Z'
+          },
+          {
+            title: 'Apple: Q2 earnings beat estimates',
+            publisher: '财经日报',
+            publishedAt: '2026-07-20T00:30:00.000Z'
           }
         ],
         serverTime: '2026-07-20T02:00:00.000Z',
@@ -196,7 +237,8 @@ test('executes search_news with its adapter clock and returns sanitized news dat
     result: {
       sources: [
         { title: '上海市场早报', publisher: '财经日报', publishedAt: '2026-07-20T01:00:00.000Z' },
-        { publishedAt: '2026-07-20T00:00:00.000Z' }
+        { publishedAt: '2026-07-20T00:00:00.000Z' },
+        { title: 'Apple: Q2 earnings beat estimates', publisher: '财经日报', publishedAt: '2026-07-20T00:30:00.000Z' }
       ],
       serverTime: '2026-07-20T02:00:00.000Z',
       latestPublishedAt: '2026-07-20T01:00:00.000Z',
@@ -319,13 +361,14 @@ test('drops every URI scheme, embedded IPv4, and nested quote or weather values'
     liveContext: async () => ({
       ok: true,
       weather: {
-        city: 'file:///private/weather',
+        city: 'file:/private/weather',
         observedAt: 'ws://weather.example/socket',
         timeZone: 'Asia/Shanghai',
         source: 'abc203.0.113.10',
         temperatureC: { endpoint: 'mailto:weather@example.com', safe: 31.2 },
         weatherCode: ['data:text/plain,secret', 2]
-      }
+      },
+      location: 'custom:/private/location'
     }),
     marketGateway: {
       getQuote: async () => ({
@@ -350,7 +393,7 @@ test('drops every URI scheme, embedded IPv4, and nested quote or weather values'
   ]);
 
   const serialized = JSON.stringify(results);
-  assert.doesNotMatch(serialized, /(?:file|ws|mailto|data):/iu);
+  assert.doesNotMatch(serialized, /(?:file|ws|mailto|data|custom):/iu);
   assert.doesNotMatch(serialized, /203\.0\.113\.1[01]/u);
   assert.deepEqual(results, [
     {

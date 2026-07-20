@@ -197,7 +197,7 @@ export default function App() {
           )));
         },
         onDone() {}
-      }, { webSearch: false });
+      });
       await put('messages', { ...assistantMessage, content: assistantText, status: 'done', toolEvents: assistantToolEvents, updatedAt: now() });
       setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, status: 'done' } : item)));
     } catch (err) {

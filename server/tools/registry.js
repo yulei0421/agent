@@ -2,74 +2,41 @@ import { isIP } from 'node:net';
 
 const OMIT = Symbol('omit');
 
-const TOOL_DEFINITIONS = Object.freeze([
-  {
-    type: 'function',
-    function: {
-      name: 'get_weather',
-      description: '查询指定城市或当前用户所在地的实时天气。',
-      parameters: {
-        type: 'object',
-        properties: {
-          city: { type: 'string', maxLength: 64 }
-        },
-        additionalProperties: false
-      }
-    }
+const TOOL_CONTRACTS = Object.freeze({
+  get_weather: {
+    description: '查询指定城市或当前用户所在地的实时天气。',
+    fields: { city: { maxLength: 64, required: false } }
   },
-  {
-    type: 'function',
-    function: {
-      name: 'search_news',
-      description: '检索与查询主题相关的近期新闻和报道。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', maxLength: 120 }
-        },
-        required: ['query'],
-        additionalProperties: false
-      }
-    }
+  search_news: {
+    description: '检索与查询主题相关的近期新闻和报道。',
+    fields: { query: { maxLength: 120, required: true } }
   },
-  {
-    type: 'function',
-    function: {
-      name: 'search_asset',
-      description: '根据名称或代码查找可查询行情的金融资产。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', maxLength: 64 }
-        },
-        required: ['query'],
-        additionalProperties: false
-      }
-    }
+  search_asset: {
+    description: '根据名称或代码查找可查询行情的金融资产。',
+    fields: { query: { maxLength: 64, required: true } }
   },
-  {
-    type: 'function',
-    function: {
-      name: 'get_quote',
-      description: '查询已确认市场代码的最新报价和数据时间。',
-      parameters: {
-        type: 'object',
-        properties: {
-          symbol: { type: 'string', maxLength: 32 }
-        },
-        required: ['symbol'],
-        additionalProperties: false
-      }
+  get_quote: {
+    description: '查询已确认市场代码的最新报价和数据时间。',
+    fields: { symbol: { maxLength: 32, required: true } }
+  }
+});
+
+const TOOL_DEFINITIONS = Object.freeze(Object.entries(TOOL_CONTRACTS).map(([name, contract]) => ({
+  type: 'function',
+  function: {
+    name,
+    description: contract.description,
+    parameters: {
+      type: 'object',
+      properties: Object.fromEntries(Object.entries(contract.fields)
+        .map(([field, rule]) => [field, { type: 'string', maxLength: rule.maxLength }])),
+      ...(Object.values(contract.fields).some((rule) => rule.required)
+        ? { required: Object.entries(contract.fields).filter(([, rule]) => rule.required).map(([field]) => field) }
+        : {}),
+      additionalProperties: false
     }
   }
-]);
-
-const TOOL_ARGUMENTS = Object.freeze({
-  get_weather: { allowed: ['city'], limits: { city: 64 }, required: [] },
-  search_news: { allowed: ['query'], limits: { query: 120 }, required: ['query'] },
-  search_asset: { allowed: ['query'], limits: { query: 64 }, required: ['query'] },
-  get_quote: { allowed: ['symbol'], limits: { symbol: 32 }, required: ['symbol'] }
-});
+})));
 
 function failure(name, errorCode) {
   return { ok: false, name: safeResultString(name) ? name : 'unknown', errorCode };
@@ -81,7 +48,7 @@ function isObject(value) {
 
 function parseCall(call) {
   const name = call?.name;
-  if (typeof name !== 'string' || !Object.hasOwn(TOOL_ARGUMENTS, name)) {
+  if (typeof name !== 'string' || !Object.hasOwn(TOOL_CONTRACTS, name)) {
     return failure(name, 'unknown_tool');
   }
   if (typeof call?.arguments !== 'string') return failure(name, 'invalid_arguments');
@@ -94,12 +61,14 @@ function parseCall(call) {
   }
   if (!isObject(argumentsValue)) return failure(name, 'invalid_arguments');
 
-  const schema = TOOL_ARGUMENTS[name];
+  const contract = TOOL_CONTRACTS[name];
   const keys = Object.keys(argumentsValue);
-  if (keys.some((key) => !schema.allowed.includes(key))) return failure(name, 'invalid_arguments');
-  for (const key of [...schema.required, ...keys]) {
+  if (keys.some((key) => !Object.hasOwn(contract.fields, key))) return failure(name, 'invalid_arguments');
+  for (const [key, rule] of Object.entries(contract.fields)) {
     const value = argumentsValue[key];
-    if (typeof value !== 'string' || value.trim().length === 0 || value.length > schema.limits[key]) {
+    if ((rule.required && !Object.hasOwn(argumentsValue, key))
+      || (Object.hasOwn(argumentsValue, key)
+        && (typeof value !== 'string' || value.trim().length === 0 || value.length > rule.maxLength))) {
       return failure(name, 'invalid_arguments');
     }
   }
@@ -129,7 +98,8 @@ function hasIpLiteral(value) {
 
 function safeResultString(value) {
   if (typeof value !== 'string' || value.trim().length === 0) return false;
-  return !/(?:^|[^A-Za-z0-9])[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)
+  return !/(?:^|[^\p{L}\p{N}])[A-Za-z][A-Za-z0-9+.-]*:\/{1,2}\S/u.test(value)
+    && !/(?:^|[^\p{L}\p{N}])(?:data|mailto|tel|urn|javascript):\S/iu.test(value)
     && !/\bwww\./iu.test(value)
     && !hasIpLiteral(value);
 }
@@ -217,7 +187,8 @@ function normalizeWeather(response) {
   if (Object.keys(weather).length > 0) result.weather = weather;
   const context = normalizeFields(response, {
     location: (value) => text(value, 128),
-    date: localDate
+    date: localDate,
+    serverTime: isoTimestamp
   });
   Object.assign(result, context);
   return result;

@@ -41,8 +41,8 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
   const originalFetch = globalThis.fetch;
   const received = [];
   globalThis.fetch = async () => streamResponse([
-    'data: {"type":"tool","name":"get_quote","symbol":"AAPL"}\\n\\n',
-    'data: {"type":"tool_result","name":"get_quote","symbol":"AAPL","status":"success","source":"yahoo-finance","asOf":"2026-07-15T00:00:00.000Z","delay":"15m"}\\n\\n',
+    'data: {"type":"tool","id":"call_quote","name":"get_quote"}\\n\\n',
+    'data: {"type":"tool_result","id":"call_quote","name":"get_quote","ok":true,"result":{"data":{"price":210,"currency":"USD"},"meta":{"symbol":"AAPL","source":"yahoo-finance","asOf":"2026-07-15T00:00:00.000Z","delay":"15m"}}}\\n\\n',
     'data: {"type":"reasoning","content":"分析中"}\\n\\n',
     'data: {"type":"delta","content":"报价已就绪"}\\n\\n',
     'data: {"type":"done"}\\n\\n'
@@ -61,8 +61,8 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
   }
 
   assert.deepEqual(received, [
-    ['tool', { type: 'tool', name: 'get_quote', symbol: 'AAPL' }],
-    ['tool_result', { type: 'tool_result', name: 'get_quote', symbol: 'AAPL', status: 'success', source: 'yahoo-finance', asOf: '2026-07-15T00:00:00.000Z', delay: '15m' }],
+    ['tool', { type: 'tool', id: 'call_quote', name: 'get_quote' }],
+    ['tool_result', { type: 'tool_result', id: 'call_quote', name: 'get_quote', ok: true, result: { data: { price: 210, currency: 'USD' }, meta: { symbol: 'AAPL', source: 'yahoo-finance', asOf: '2026-07-15T00:00:00.000Z', delay: '15m' } } }],
     ['reasoning', '分析中'],
     ['delta', '报价已就绪'],
     ['done']
@@ -80,23 +80,24 @@ test('App preserves early tool events on the streaming assistant message', async
   assert.match(source, /onToolResult\(event\)[\s\S]*appendToolEvent\(event\)/);
 });
 
-test('MessageItem renders provenance for successful tools and error codes without prices on failures', async () => {
+test('MessageItem renders generic registry events and result-backed tool cards', async () => {
   const source = await readSource('../src/components/MessageItem.jsx');
 
   assert.match(source, /数据来源与工具调用/);
   assert.match(source, /toolEvents\.length/);
-  assert.match(source, /event\.source/);
-  assert.match(source, /event\.asOf/);
-  assert.match(source, /event\.delay/);
+  assert.match(source, /event\.type === 'tool'/);
+  assert.match(source, /event\.type !== 'tool_result'/);
+  assert.match(source, /event\.ok/);
+  assert.match(source, /event\.result/);
   assert.match(source, /event\.errorCode/);
-  assert.match(source, /event\.assetName/);
-  assert.match(source, /event\.currency/);
-  assert.match(source, /event\.observedAt/);
-  assert.match(source, /event\.fetchedAt/);
-  assert.match(source, /event\.ageSeconds/);
+  assert.match(source, /event\.result\?\.meta\?\.source/);
+  assert.match(source, /event\.result\?\.meta\?\.asOf/);
+  assert.match(source, /event\.result\?\.meta\?\.delay/);
+  assert.match(source, /event\.result\?\.weather\?\.observedAt/);
+  assert.match(source, /event\.result\?\.weather\?\.ageSeconds/);
   assert.match(source, /未解析代码/);
   assert.match(source, /Array\.isArray\(message\.toolEvents\)/);
-  assert.match(source, /Array\.isArray\(event\.sources\)/);
+  assert.match(source, /Array\.isArray\(event\.result\?\.sources\)/);
   assert.match(source, /typeof event === 'object'/);
-  assert.doesNotMatch(source, /event\.price/);
+  assert.doesNotMatch(source, /source\.url|href=\{source\.url\}/);
 });
