@@ -71,31 +71,6 @@ const TOOL_ARGUMENTS = Object.freeze({
   get_quote: { allowed: ['symbol'], limits: { symbol: 32 }, required: ['symbol'] }
 });
 
-const WEATHER_FIELDS = Object.freeze([
-  'city',
-  'observedAt',
-  'timeZone',
-  'ageSeconds',
-  'temperatureC',
-  'apparentTemperatureC',
-  'weatherCode',
-  'windSpeedKph',
-  'source'
-]);
-const QUOTE_DATA_FIELDS = Object.freeze(['price', 'changePercent', 'currency']);
-const QUOTE_META_FIELDS = Object.freeze([
-  'source',
-  'asOf',
-  'observedAt',
-  'fetchedAt',
-  'ageSeconds',
-  'delay',
-  'symbol',
-  'confidence',
-  'cached'
-]);
-const ASSET_FIELDS = Object.freeze(['symbol', 'name', 'market', 'type', 'source']);
-
 function failure(name, errorCode) {
   return { ok: false, name: safeResultString(name) ? name : 'unknown', errorCode };
 }
@@ -138,7 +113,18 @@ function safeErrorCode(value, fallback) {
 function hasIpLiteral(value) {
   const ipv4Literals = value.match(/\d{1,3}(?:\.\d{1,3}){3}/gu) ?? [];
   if (ipv4Literals.some((literal) => isIP(literal) !== 0)) return true;
-  return value.match(/[0-9A-Fa-f:.]+/gu)?.some((token) => isIP(token) !== 0) ?? false;
+  const tokens = value.match(/[0-9A-Fa-f:.]+/gu) ?? [];
+  return tokens.some((token) => {
+    if (isIP(token) !== 0) return true;
+    for (let start = 0; start < token.length; start += 1) {
+      const maxEnd = Math.min(token.length, start + 45);
+      for (let end = start + 2; end <= maxEnd; end += 1) {
+        const candidate = token.slice(start, end);
+        if (candidate.includes(':') && isIP(candidate) === 6) return true;
+      }
+    }
+    return false;
+  });
 }
 
 function safeResultString(value) {
@@ -148,36 +134,46 @@ function safeResultString(value) {
     && !hasIpLiteral(value);
 }
 
-function sanitizeResultValue(value, seen = new WeakSet()) {
-  if (typeof value === 'string') return safeResultString(value) ? value : OMIT;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : OMIT;
-  if (typeof value === 'boolean' || value === null) return value;
-  if (typeof value !== 'object' || seen.has(value)) return OMIT;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeResultValue(item, seen))
-      .filter((item) => item !== OMIT);
-  }
-  return Object.fromEntries(Object.entries(value)
-    .filter(([key]) => safeResultString(key))
-    .map(([key, item]) => [key, sanitizeResultValue(item, seen)])
-    .filter(([, item]) => item !== OMIT));
+function text(value, maxLength = 200) {
+  return safeResultString(value) && value.length <= maxLength ? value : OMIT;
 }
 
-function pickFields(value, fields) {
-  if (!isObject(value)) return {};
-  return Object.fromEntries(fields
-    .filter((field) => Object.hasOwn(value, field))
-    .map((field) => [field, sanitizeResultValue(value[field])])
-    .filter(([, fieldValue]) => fieldValue !== OMIT));
+function stableId(value, maxLength = 128) {
+  return text(value, maxLength) !== OMIT && /^[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(value) ? value : OMIT;
 }
 
-function pickStringFields(value, fields) {
+function isoTimestamp(value) {
+  if (text(value, 40) === OMIT) return OMIT;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value ? value : OMIT;
+}
+
+function localDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value ?? '')) return OMIT;
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().startsWith(value) ? value : OMIT;
+}
+
+function boundedNumber(value, min, max, integer = false) {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && value >= min
+    && value <= max
+    && (!integer || Number.isInteger(value))
+    ? value
+    : OMIT;
+}
+
+function strictBoolean(value) {
+  return typeof value === 'boolean' ? value : OMIT;
+}
+
+function normalizeFields(value, normalizers) {
   if (!isObject(value)) return {};
-  return Object.fromEntries(fields
-    .filter((field) => safeResultString(value[field]))
-    .map((field) => [field, value[field]]));
+  return Object.fromEntries(Object.entries(normalizers)
+    .filter(([field]) => Object.hasOwn(value, field))
+    .map(([field, normalize]) => [field, normalize(value[field])])
+    .filter(([, normalized]) => normalized !== OMIT));
 }
 
 function resolvedDate(value) {
@@ -190,21 +186,40 @@ function normalizeNews(response) {
   if (Array.isArray(response.sources)) {
     result.sources = response.sources
       .filter(isObject)
-      .map((source) => pickStringFields(source, ['title', 'publisher', 'publishedAt']));
+      .map((source) => normalizeFields(source, {
+        title: (value) => text(value, 300),
+        publisher: (value) => text(value, 160),
+        publishedAt: isoTimestamp
+      }));
   }
-  for (const field of ['serverTime', 'latestPublishedAt']) {
-    if (safeResultString(response[field])) result[field] = response[field];
-  }
-  if (Number.isFinite(response.latestAgeSeconds)) result.latestAgeSeconds = response.latestAgeSeconds;
+  const metadata = normalizeFields(response, {
+    serverTime: isoTimestamp,
+    latestPublishedAt: isoTimestamp,
+    latestAgeSeconds: (value) => boundedNumber(value, 0, 315360000)
+  });
+  Object.assign(result, metadata);
   return result;
 }
 
 function normalizeWeather(response) {
   const result = {};
-  const weather = pickFields(response.weather, WEATHER_FIELDS);
+  const weather = normalizeFields(response.weather, {
+    city: (value) => text(value, 128),
+    observedAt: isoTimestamp,
+    timeZone: (value) => stableId(value, 64),
+    ageSeconds: (value) => boundedNumber(value, 0, 315360000),
+    temperatureC: (value) => boundedNumber(value, -100, 100),
+    apparentTemperatureC: (value) => boundedNumber(value, -100, 100),
+    weatherCode: (value) => boundedNumber(value, 0, 1000, true),
+    windSpeedKph: (value) => boundedNumber(value, 0, 1000),
+    source: (value) => stableId(value, 128)
+  });
   if (Object.keys(weather).length > 0) result.weather = weather;
-  if (safeResultString(response.location)) result.location = response.location;
-  if (safeResultString(response.date)) result.date = response.date;
+  const context = normalizeFields(response, {
+    location: (value) => text(value, 128),
+    date: localDate
+  });
+  Object.assign(result, context);
   return result;
 }
 
@@ -252,7 +267,13 @@ export function createToolRegistry({
         if (!Array.isArray(assets)) return failure(parsed.name, 'not_found');
         const result = assets
           .filter(isObject)
-          .map((asset) => pickStringFields(asset, ASSET_FIELDS))
+          .map((asset) => normalizeFields(asset, {
+            symbol: (value) => stableId(value, 64),
+            name: (value) => text(value, 200),
+            market: (value) => stableId(value, 32),
+            type: (value) => stableId(value, 32),
+            source: (value) => stableId(value, 128)
+          }))
           .filter((asset) => Object.keys(asset).length > 0)
           .slice(0, 5);
         return result.length > 0
@@ -273,8 +294,22 @@ export function createToolRegistry({
         ok: true,
         name: parsed.name,
         result: {
-          data: pickFields(response.data, QUOTE_DATA_FIELDS),
-          meta: pickFields(response.meta, QUOTE_META_FIELDS)
+          data: normalizeFields(response.data, {
+            price: (value) => boundedNumber(value, 0, 1000000000000),
+            changePercent: (value) => boundedNumber(value, -1000000, 1000000),
+            currency: (value) => stableId(value, 16)
+          }),
+          meta: normalizeFields(response.meta, {
+            source: (value) => stableId(value, 128),
+            asOf: isoTimestamp,
+            observedAt: isoTimestamp,
+            fetchedAt: isoTimestamp,
+            ageSeconds: (value) => boundedNumber(value, 0, 315360000),
+            delay: (value) => stableId(value, 64),
+            symbol: (value) => stableId(value, 64),
+            confidence: (value) => stableId(value, 64),
+            cached: strictBoolean
+          })
         }
       };
     } catch (error) {

@@ -314,7 +314,7 @@ test('omits raw URL and IP strings from every tool result', async () => {
   assert.equal(results.every((result) => result.ok), true);
 });
 
-test('drops every URI scheme, embedded IPv4, and unsafe nested quote or weather values', async () => {
+test('drops every URI scheme, embedded IPv4, and nested quote or weather values', async () => {
   const registry = createToolRegistry({
     liveContext: async () => ({
       ok: true,
@@ -358,9 +358,7 @@ test('drops every URI scheme, embedded IPv4, and unsafe nested quote or weather 
       name: 'get_weather',
       result: {
         weather: {
-          timeZone: 'Asia/Shanghai',
-          temperatureC: { safe: 31.2 },
-          weatherCode: [2]
+          timeZone: 'Asia/Shanghai'
         }
       }
     },
@@ -368,8 +366,121 @@ test('drops every URI scheme, embedded IPv4, and unsafe nested quote or weather 
       ok: true,
       name: 'get_quote',
       result: {
-        data: { price: { value: 210 }, changePercent: [5] },
-        meta: { source: { label: 'Yahoo' }, delay: ['unknown'], cached: false }
+        data: {},
+        meta: { cached: false }
+      }
+    }
+  ]);
+});
+
+test('keeps only per-field valid scalars and rejects embedded IPv6', async () => {
+  const registry = createToolRegistry({
+    liveContext: async () => ({
+      ok: true,
+      weather: {
+        city: '上海',
+        observedAt: '2026-07-20T01:00:00.000Z',
+        timeZone: 'Asia/Shanghai',
+        ageSeconds: 60,
+        temperatureC: 31.2,
+        apparentTemperatureC: '31.5',
+        weatherCode: Number.NaN,
+        windSpeedKph: [12],
+        source: '11000:2000::1'
+      },
+      location: '上海',
+      date: '2026-07-20'
+    }),
+    webSearch: async () => ({
+      ok: true,
+      sources: [
+        { title: '上海市场早报', publisher: '财经日报', publishedAt: '2026-07-20T01:00:00.000Z' },
+        { title: 'x'.repeat(301), publisher: ['nested'], publishedAt: 'not-a-date' }
+      ],
+      serverTime: '2026-07-20T02:00:00.000Z',
+      latestPublishedAt: 'tomorrow',
+      latestAgeSeconds: Number.NaN
+    }),
+    assetSearch: async () => ([
+      { symbol: '600519.SH', name: '贵州茅台', market: 'cn', type: 'stock', source: 'local-index' },
+      { symbol: { nested: '600519.SH' }, name: 'x'.repeat(201), market: 'cn' }
+    ]),
+    marketGateway: {
+      getQuote: async () => ({
+        ok: true,
+        data: { price: 210, changePercent: Number.NaN, currency: { value: 'USD' } },
+        meta: {
+          source: 'yahoo-finance',
+          asOf: '2026-07-20T01:00:00.000Z',
+          observedAt: 'bad-date',
+          fetchedAt: '2026-07-20T01:01:00.000Z',
+          ageSeconds: -1,
+          delay: 'unknown',
+          symbol: 'AAPL.US',
+          confidence: 'provider',
+          cached: true
+        }
+      })
+    }
+  });
+
+  const results = await Promise.all([
+    registry.execute({ name: 'get_weather', arguments: '{}' }),
+    registry.execute({ name: 'search_news', arguments: '{"query":"市场"}' }),
+    registry.execute({ name: 'search_asset', arguments: '{"query":"资产"}' }),
+    registry.execute({ name: 'get_quote', arguments: '{"symbol":"AAPL"}' })
+  ]);
+
+  assert.doesNotMatch(JSON.stringify(results), /1000:2000::1/u);
+  assert.deepEqual(results, [
+    {
+      ok: true,
+      name: 'get_weather',
+      result: {
+        weather: {
+          city: '上海',
+          observedAt: '2026-07-20T01:00:00.000Z',
+          timeZone: 'Asia/Shanghai',
+          ageSeconds: 60,
+          temperatureC: 31.2
+        },
+        location: '上海',
+        date: '2026-07-20'
+      }
+    },
+    {
+      ok: true,
+      name: 'search_news',
+      result: {
+        sources: [
+          { title: '上海市场早报', publisher: '财经日报', publishedAt: '2026-07-20T01:00:00.000Z' },
+          {}
+        ],
+        serverTime: '2026-07-20T02:00:00.000Z'
+      }
+    },
+    {
+      ok: true,
+      name: 'search_asset',
+      result: [
+        { symbol: '600519.SH', name: '贵州茅台', market: 'cn', type: 'stock', source: 'local-index' },
+        { market: 'cn' }
+      ]
+    },
+    {
+      ok: true,
+      name: 'get_quote',
+      result: {
+        data: { price: 210 },
+        meta: {
+          source: 'yahoo-finance',
+          asOf: '2026-07-20T01:00:00.000Z',
+          fetchedAt: '2026-07-20T01:01:00.000Z',
+          delay: 'unknown',
+          symbol: 'AAPL.US',
+          confidence: 'provider',
+          cached: true
+        }
       }
     }
   ]);

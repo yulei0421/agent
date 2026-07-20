@@ -1,6 +1,6 @@
-# DeepSeek Agent Demo
+# agent
 
-学习版 AI 前端 Demo：React + Vite + SSE + WebSocket + IndexedDB + 虚拟滚动 + DeepSeek。
+金融 AI Agent 学习 Demo：React + Vite + SSE + WebSocket + IndexedDB + 虚拟滚动 + DeepSeek。
 
 ## 本地配置与运行
 
