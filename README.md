@@ -2,17 +2,38 @@
 
 学习版 AI 前端 Demo：React + Vite + SSE + WebSocket + IndexedDB + 虚拟滚动 + DeepSeek。
 
-## 运行
+## 本地配置与运行
 
 ```bash
 pnpm install
 cp .env.example .env
 ```
 
-编辑 `.env`：
+编辑本地 `.env`。唯一必须填写的是 `DEEPSEEK_API_KEY`：
 
 ```env
 DEEPSEEK_API_KEY=在这里填写你的apikey
+```
+
+`.env` 已被 Git 忽略，不能提交 API Key。请勿把密钥粘贴到 README、代码、Issue、提交信息或截图中；需要分享配置时只使用 `.env.example`。
+
+### 配置项
+
+| 配置项 | 是否必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `DEEPSEEK_API_KEY` | 是 | 无 | DeepSeek API Key。仅写入本地 `.env`。 |
+| `DEEPSEEK_BASE_URL` | 否 | `https://api.deepseek.com` | DeepSeek 兼容 API 服务地址。 |
+| `DEEPSEEK_MODEL` | 否 | `deepseek-v4-flash` | 请求使用的模型名称。请填写账户已开通的模型。 |
+| `PORT` | 否 | `8787` | 本地 Node 服务端口。端口被占用时改为其他可用端口。 |
+| `CLIENT_URL` | 否 | `http://127.0.0.1:5173` | 允许访问服务端的前端地址；前端端口变化时同步修改。 |
+| `TRUST_PROXY` | 否 | `false` | 仅在恰好一层受信任反向代理转发客户端 IP 时设为 `true`。 |
+| `BINANCE_REST_BASE_URL` | 否 | `https://api.binance.com` | 演示用公开行情数据源地址。 |
+
+可直接以 `.env.example` 为模板：
+
+```bash
+cp .env.example .env
+# 然后仅将 .env 中的 DEEPSEEK_API_KEY 替换为你自己的密钥
 ```
 
 启动：
