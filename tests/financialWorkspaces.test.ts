@@ -7,7 +7,7 @@ async function readSource(path) {
 }
 
 test('FinancialWorkspace exposes three accessible workbench tabs', async () => {
-  const source = await readSource('../src/components/FinancialWorkspace.jsx');
+  const source = await readSource('../src/components/FinancialWorkspace.tsx');
 
   assert.match(source, /role="tablist"/);
   assert.match(source, /行情研究/);
@@ -17,7 +17,7 @@ test('FinancialWorkspace exposes three accessible workbench tabs', async () => {
 });
 
 test('App owns the current financial tab and selected asset context', async () => {
-  const source = await readSource('../src/App.jsx');
+  const source = await readSource('../src/App.tsx');
 
   assert.match(source, /const \[financialTab, setFinancialTab\] = useState\('markets'\)/);
   assert.match(source, /const \[financialSymbol, setFinancialSymbol\] = useState\('AAPL'\)/);
@@ -26,7 +26,7 @@ test('App owns the current financial tab and selected asset context', async () =
 });
 
 test('market research lists supported assets and only describes data states', async () => {
-  const source = await readSource('../src/components/FinancialWorkspace.jsx');
+  const source = await readSource('../src/components/FinancialWorkspace.tsx');
 
   for (const symbol of ['AAPL', '0700.HK', '600519.SH', 'BTC/USDT']) {
     assert.match(source, new RegExp(symbol.replace('/', '\\/')));
@@ -37,7 +37,7 @@ test('market research lists supported assets and only describes data states', as
 });
 
 test('event and trader workbenches disclose tool requirements and research-only safety states', async () => {
-  const source = await readSource('../src/components/FinancialWorkspace.jsx');
+  const source = await readSource('../src/components/FinancialWorkspace.tsx');
 
   assert.match(source, /通过工具获取新闻\/公告/);
   assert.match(source, /未配置新闻或公告工具/);
@@ -49,7 +49,7 @@ test('event and trader workbenches disclose tool requirements and research-only 
 });
 
 test('ChatWindow presents the selected symbol as financial context', async () => {
-  const source = await readSource('../src/components/ChatWindow.jsx');
+  const source = await readSource('../src/components/ChatWindow.tsx');
 
   assert.match(source, /financialSymbol/);
   assert.match(source, /当前资产/);
@@ -89,7 +89,7 @@ test('active financial entry uses a unified surface instead of an inset selectio
 test('session rows present the title and delete action as one integrated control', async () => {
   const [source, sidebar] = await Promise.all([
     readSource('../src/styles.css'),
-    readSource('../src/components/Sidebar.jsx')
+    readSource('../src/components/Sidebar.tsx')
   ]);
 
   assert.match(source, /\.sidebar\s+\.session-row\s*\{[\s\S]*grid-template-columns:\s*1fr[\s\S]*gap:\s*0/);
@@ -103,7 +103,7 @@ test('session rows present the title and delete action as one integrated control
 });
 
 test('asset suggestions are shown only while the search control is engaged', async () => {
-  const source = await readSource('../src/App.jsx');
+  const source = await readSource('../src/App.tsx');
 
   assert.match(source, /const \[assetSearchOpen, setAssetSearchOpen\] = useState\(false\)/);
   assert.match(source, /onFocus=\{\(\) => setAssetSearchOpen\(true\)\}/);

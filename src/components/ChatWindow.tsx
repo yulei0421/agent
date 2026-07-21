@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageList } from './MessageList.jsx';
+import { MessageList } from './MessageList.tsx';
 
 export function ChatWindow({ messages, streaming, financialMode, financialSymbol, onSend, onStop }) {
   const [content, setContent] = useState('');

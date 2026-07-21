@@ -18,7 +18,7 @@ function streamResponse(events) {
 }
 
 test('Sidebar provides an accessible financial conversation entry', async () => {
-  const source = await readSource('../src/components/Sidebar.jsx');
+  const source = await readSource('../src/components/Sidebar.tsx');
 
   assert.match(source, /onFinancialMode/);
   assert.match(source, /金融对话/);
@@ -26,7 +26,7 @@ test('Sidebar provides an accessible financial conversation entry', async () => 
 });
 
 test('ChatWindow explains financial context and suggests explicit market symbols', async () => {
-  const source = await readSource('../src/components/ChatWindow.jsx');
+  const source = await readSource('../src/components/ChatWindow.tsx');
 
   assert.match(source, /financialMode/);
   assert.match(source, /金融对话/);
@@ -70,7 +70,7 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
 });
 
 test('App preserves early tool events on the streaming assistant message', async () => {
-  const source = await readSource('../src/App.jsx');
+  const source = await readSource('../src/App.tsx');
 
   assert.match(source, /const \[financialMode, setFinancialMode\] = useState\(false\)/);
   assert.match(source, /toolEvents:\s*\[\]/);
@@ -81,7 +81,7 @@ test('App preserves early tool events on the streaming assistant message', async
 });
 
 test('App sends financial mode as bounded request context instead of a client system message', async () => {
-  const source = await readSource('../src/App.jsx');
+  const source = await readSource('../src/App.tsx');
 
   assert.match(source, /financialMode\s*\?\s*\{\s*financial:\s*\{\s*tab:\s*financialTab,\s*symbol:\s*financialSymbol\s*}\s*}\s*:\s*undefined/);
   assert.match(source, /streamChat\(payload, abortRef\.current\.signal,[\s\S]*financialContext\)/);
@@ -89,7 +89,7 @@ test('App sends financial mode as bounded request context instead of a client sy
 });
 
 test('MessageItem renders generic registry events and result-backed tool cards', async () => {
-  const source = await readSource('../src/components/MessageItem.jsx');
+  const source = await readSource('../src/components/MessageItem.tsx');
 
   assert.match(source, /数据来源与工具调用/);
   assert.match(source, /toolEvents\.length/);

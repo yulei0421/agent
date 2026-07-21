@@ -8,9 +8,9 @@ async function readSource(path) {
 
 test('financial mode composes a compact top bar, workbench navigation, research canvas, and dedicated chat panel', async () => {
   const [app, workspace, chat] = await Promise.all([
-    readSource('../src/App.jsx'),
-    readSource('../src/components/FinancialWorkspace.jsx'),
-    readSource('../src/components/ChatWindow.jsx')
+    readSource('../src/App.tsx'),
+    readSource('../src/components/FinancialWorkspace.tsx'),
+    readSource('../src/components/ChatWindow.tsx')
   ]);
 
   assert.match(app, /financial-workbench-bar/);
@@ -35,7 +35,7 @@ test('financial layout gives its navigation, research canvas, and chat message a
 
 test('financial layout stacks navigation, canvas, and chat in reading order on mobile without invented live data', async () => {
   const [workspace, styles] = await Promise.all([
-    readSource('../src/components/FinancialWorkspace.jsx'),
+    readSource('../src/components/FinancialWorkspace.tsx'),
     readSource('../src/styles.css')
   ]);
 

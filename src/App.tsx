@@ -4,11 +4,11 @@ import { searchAssets } from './lib/market.js';
 import { clear, getAll, id, now, put, remove } from './lib/db.js';
 import { buildModelMessages, normalizeInterruptedMessages } from './lib/history.js';
 import { connectStatusSocket } from './lib/websocket.js';
-import { Login } from './components/Login.jsx';
-import { Sidebar } from './components/Sidebar.jsx';
-import { ChatWindow } from './components/ChatWindow.jsx';
-import { StatusBar } from './components/StatusBar.jsx';
-import { FinancialWorkspace } from './components/FinancialWorkspace.jsx';
+import { Login } from './components/Login.tsx';
+import { Sidebar } from './components/Sidebar.tsx';
+import { ChatWindow } from './components/ChatWindow.tsx';
+import { StatusBar } from './components/StatusBar.tsx';
+import { FinancialWorkspace } from './components/FinancialWorkspace.tsx';
 
 export default function App() {
   const [ready, setReady] = useState(false);

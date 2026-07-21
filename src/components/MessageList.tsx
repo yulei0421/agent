@@ -1,4 +1,4 @@
-import { MessageItem } from './MessageItem.jsx';
+import { MessageItem } from './MessageItem.tsx';
 
 export function MessageList({ messages, streaming }) {
   if (messages.length === 0) {

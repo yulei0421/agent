@@ -133,10 +133,10 @@ test('streamChat sends model messages with an explicit financial request context
 
 test('the server creates one model-directed registry and the UI renders its generic result shape', async () => {
   const [serverSource, windowSource, appSource, itemSource] = await Promise.all([
-    readFile(new URL('../server/index.js', import.meta.url), 'utf8'),
-    readFile(new URL('../src/components/ChatWindow.jsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
-    readFile(new URL('../src/components/MessageItem.jsx', import.meta.url), 'utf8')
+    readFile(new URL('../server/index.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/ChatWindow.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/components/MessageItem.tsx', import.meta.url), 'utf8')
   ]);
 
   assert.match(serverSource, /createToolRegistry\(\{[\s\S]*liveContext: resolveLiveContext,[\s\S]*webSearch: searchWeb,[\s\S]*marketGateway,[\s\S]*assetSearch/);

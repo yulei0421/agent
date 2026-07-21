@@ -50,17 +50,17 @@ pnpm dev
 如果你的终端里 `pnpm dev` 只启动了 Vite，可开两个终端分别运行：
 
 ```bash
-node server/index.js
+pnpm server
 pnpm client
 ```
 
 ## 学习点
 
-- SSE：`server/deepseek.js` 转发 DeepSeek 流式输出，`src/lib/chat.js` 消费。
-- WebSocket：`server/websocket.js` 与 `src/lib/websocket.js` 展示双向连接。
-- IndexedDB：`src/lib/db.js` 保存用户、会话、消息、离线队列。
+- SSE：`server/deepseek.ts` 转发 DeepSeek 流式输出，`src/lib/chat.ts` 消费。
+- WebSocket：`server/websocket.ts` 与 `src/lib/websocket.ts` 展示双向连接。
+- IndexedDB：`src/lib/db.ts` 保存用户、会话、消息、离线队列。
 - 虚拟滚动：`src/lib/virtualList.js` 控制消息列表渲染范围。
-- Markdown：`src/components/MessageItem.jsx` 使用 `react-markdown`。
+- Markdown：`src/components/MessageItem.tsx` 使用 `react-markdown`。
 - 模型工具：服务端将 `get_weather`、`search_news`、`search_asset` 和 `get_quote` 统一注册给 DeepSeek，由模型在需要时选择调用。浏览器只提交对话消息，不能请求或关闭某个网络工具。
 - 工具结果：SSE 会依次发送通用的调用和结果事件；前端展示天气、新闻、资产和行情卡片。新闻卡片仅显示经过清洗的标题、媒体和时间，不向浏览器下发原始来源 URL。
 

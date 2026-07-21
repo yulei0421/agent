@@ -7,19 +7,19 @@ async function readSource(path) {
 }
 
 test('ChatWindow forwards streaming state to MessageList', async () => {
-  const source = await readSource('../src/components/ChatWindow.jsx');
+  const source = await readSource('../src/components/ChatWindow.tsx');
 
   assert.match(source, /<MessageList\b[^>]*\bstreaming=\{streaming\}/);
 });
 
 test('MessageList forwards streaming state to MessageItem', async () => {
-  const source = await readSource('../src/components/MessageList.jsx');
+  const source = await readSource('../src/components/MessageList.tsx');
 
   assert.match(source, /<MessageItem\b[^>]*\bstreaming=\{streaming\}/);
 });
 
 test('MessageItem detects streaming messages by status', async () => {
-  const source = await readSource('../src/components/MessageItem.jsx');
+  const source = await readSource('../src/components/MessageItem.tsx');
 
   assert.match(source, /message\.status\s*===\s*['\"]streaming['\"]/);
 });
@@ -61,14 +61,14 @@ test('assistant messages have top breathing room and a flat tool-source attachme
 });
 
 test('ChatWindow textarea submits on Enter while preserving Shift+Enter newlines', async () => {
-  const source = await readSource('../src/components/ChatWindow.jsx');
+  const source = await readSource('../src/components/ChatWindow.tsx');
   const textarea = source.match(/<textarea\b[\s\S]*?\/>/)?.[0] ?? '';
 
   assert.match(textarea, /onKeyDown=\{\(event\)\s*=>\s*\{\s*if\s*\(\s*event\.key\s*!==\s*['\"]Enter['\"]\s*\|\|\s*event\.shiftKey\s*\|\|\s*event\.nativeEvent\.isComposing\s*\)\s*return;\s*event\.preventDefault\(\);\s*event\.currentTarget\.form\?\.requestSubmit\(\);\s*\}\}/);
 });
 
 test('MessageList renders variable-height messages directly and provides a new-session empty state', async () => {
-  const source = await readSource('../src/components/MessageList.jsx');
+  const source = await readSource('../src/components/MessageList.tsx');
 
   assert.doesNotMatch(source, /getVirtualRange|virtualList/);
   assert.match(source, /messages\.length === 0/);
