@@ -14,12 +14,19 @@ const ALLOWED_ORIGINS = Object.freeze([
   'https://api.binance.com'
 ]);
 
-export function getMarketConfig(market) {
+export type MarketProvider = 'eastmoney' | 'tencent' | 'yahoo-finance' | 'binance';
+export interface MarketConfig {
+  configured: boolean;
+  provider: MarketProvider;
+  delay: string;
+}
+
+export function getMarketConfig(market: unknown): MarketConfig {
   if (typeof market !== 'string' || !Object.hasOwn(MARKET_CONFIGS, market)) {
     throw new Error('Unsupported market');
   }
 
-  return MARKET_CONFIGS[market];
+  return MARKET_CONFIGS[market as keyof typeof MARKET_CONFIGS];
 }
 
 export function getAllowedOrigins() {

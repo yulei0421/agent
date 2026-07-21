@@ -1,6 +1,7 @@
+import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 
-export function attachWebSocket(server) {
+export function attachWebSocket(server: Server): void {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', (socket) => {

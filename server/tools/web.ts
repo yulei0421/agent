@@ -1,12 +1,14 @@
+import type { FetchLike, FetchResponseLike } from '../market/types.js';
+
 const GOOGLE_NEWS_RSS_URL = 'https://news.google.com/rss/search';
 const MAX_QUERY_LENGTH = 120;
 const MAX_SOURCES = 5;
 const TIMEOUT_MS = 8000;
 
-function decodeXml(value) {
+function decodeXml(value: string): string {
   return value
     .replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1')
-    .replace(/&#(x[0-9a-fA-F]+|\d+);/g, (_, entity) => {
+    .replace(/&#(x[0-9a-fA-F]+|\d+);/g, (_match: string, entity: string) => {
       const codePoint = entity.startsWith('x') ? Number.parseInt(entity.slice(1), 16) : Number.parseInt(entity, 10);
       return Number.isSafeInteger(codePoint) ? String.fromCodePoint(codePoint) : '';
     })
@@ -18,12 +20,12 @@ function decodeXml(value) {
     .trim();
 }
 
-function itemTag(item, tagName) {
+function itemTag(item: string, tagName: string): string {
   const match = item.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)</${tagName}\\s*>`, 'i'));
-  return match ? decodeXml(match[1]) : '';
+  return match?.[1] ? decodeXml(match[1]) : '';
 }
 
-function safeNewsUrl(value) {
+function safeNewsUrl(value: string): string | null {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' && url.hostname === 'news.google.com' ? url.href : null;
@@ -32,12 +34,13 @@ function safeNewsUrl(value) {
   }
 }
 
-function parseRssItems(xml, serverTimeMs) {
+function parseRssItems(xml: string, serverTimeMs: number): { title: string; url: string; publisher: string; publishedAt: string }[] {
   if (typeof xml !== 'string' || !/<rss\b/i.test(xml)) throw new Error('invalid RSS');
 
   const sources = [];
   for (const match of xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)) {
     const item = match[1];
+    if (!item) continue;
     const title = itemTag(item, 'title');
     const url = safeNewsUrl(itemTag(item, 'link'));
     const publisher = itemTag(item, 'source');
@@ -52,17 +55,23 @@ function parseRssItems(xml, serverTimeMs) {
     .map(({ publishedAtMs, ...source }) => source);
 }
 
-function isValidQuery(query) {
+function isValidQuery(query: unknown): query is string {
   return typeof query === 'string' && query.trim().length > 0 && query.length <= MAX_QUERY_LENGTH;
 }
 
-async function fetchRss(fetchImpl, url, timeoutMs, signal) {
+type FetchRssResult = { ok: true; text: string } | { ok: false; errorCode: string };
+
+function isFetchResponse(value: unknown): value is FetchResponseLike {
+  return value !== null && typeof value === 'object' && 'ok' in value;
+}
+
+async function fetchRss(fetchImpl: FetchLike, url: string, timeoutMs: number, signal: AbortSignal | undefined): Promise<FetchRssResult> {
   if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
   const controller = new AbortController();
   let timeoutId;
   let removeAbortListener = () => {};
   try {
-    const cancelled = new Promise((resolve) => {
+    const cancelled: Promise<{ aborted: true }> = new Promise((resolve) => {
       const abort = () => {
         controller.abort();
         resolve({ aborted: true });
@@ -70,26 +79,26 @@ async function fetchRss(fetchImpl, url, timeoutMs, signal) {
       signal?.addEventListener('abort', abort, { once: true });
       removeAbortListener = () => signal?.removeEventListener('abort', abort);
     });
-    const timeout = new Promise((resolve) => {
+    const timeout: Promise<{ timedOut: true }> = new Promise((resolve) => {
       timeoutId = setTimeout(() => {
         controller.abort();
         resolve({ timedOut: true });
       }, timeoutMs);
     });
-    const response = await Promise.race([
+    const response: FetchResponseLike | { aborted: true } | { timedOut: true } = await Promise.race([
       fetchImpl(url, { method: 'GET', redirect: 'error', signal: controller.signal }),
       timeout,
       cancelled
     ]);
-    if (response?.aborted) return { ok: false, errorCode: 'request_aborted' };
-    if (response?.timedOut) return { ok: false, errorCode: 'timeout' };
-    if (!response || response.status !== 200 || !response.ok || typeof response.text !== 'function') {
+    if ('aborted' in response && response.aborted) return { ok: false, errorCode: 'request_aborted' };
+    if ('timedOut' in response && response.timedOut) return { ok: false, errorCode: 'timeout' };
+    if (!isFetchResponse(response) || response.status !== 200 || !response.ok || typeof response.text !== 'function') {
       return { ok: false, errorCode: 'upstream_unavailable' };
     }
-    const text = await Promise.race([response.text(), timeout, cancelled]);
-    if (text?.aborted) return { ok: false, errorCode: 'request_aborted' };
-    if (text?.timedOut) return { ok: false, errorCode: 'timeout' };
-    return { ok: true, text };
+    const text: string | { aborted: true } | { timedOut: true } = await Promise.race([response.text(), timeout, cancelled]);
+    if (typeof text !== 'string' && 'aborted' in text && text.aborted) return { ok: false, errorCode: 'request_aborted' };
+    if (typeof text !== 'string' && 'timedOut' in text && text.timedOut) return { ok: false, errorCode: 'timeout' };
+    return { ok: true, text: typeof text === 'string' ? text : '' };
   } catch {
     if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
     return { ok: false, errorCode: 'upstream_unavailable' };
@@ -99,12 +108,15 @@ async function fetchRss(fetchImpl, url, timeoutMs, signal) {
   }
 }
 
-export function buildGoogleNewsRssUrl(query) {
+export function buildGoogleNewsRssUrl(query: string): string {
   const params = new URLSearchParams({ q: query, hl: 'zh-CN', gl: 'CN', ceid: 'CN:zh-Hans' });
   return `${GOOGLE_NEWS_RSS_URL}?${params}`;
 }
 
-export async function searchWeb(query, { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, now = new Date(), signal } = {}) {
+export async function searchWeb(
+  query: unknown,
+  { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, now = new Date(), signal }: { fetchImpl?: FetchLike; timeoutMs?: number; now?: Date; signal?: AbortSignal } = {}
+) {
   if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
   if (!isValidQuery(query)) return { ok: false, errorCode: 'invalid_query' };
 
