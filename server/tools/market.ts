@@ -1,5 +1,6 @@
 import { resolveChineseAssetNameWithStatus } from '../market/search.js';
 import { normalizeSymbol } from '../market/symbols.js';
+import type { AssetSearchResult } from '../market/types.js';
 
 const MAX_SYMBOLS = 3;
 const SAFE_ERROR_CODE = /^[a-z_]+$/;
@@ -13,7 +14,33 @@ const TIME_SUFFIX = /(?:今天|今日|当前|现在|实时|最新)$/u;
 const TRAILING_CONNECTOR = /(?:和|与|及|跟)+$/u;
 const MARKET_INTENT = /(行情|股价|价格|走势|指数|股票|证券|A股|港股|美股|基金|币价|加密货币|比特币|涨跌)/u;
 
-function latestUserContent(messages) {
+type UnknownRecord = Record<string, unknown>;
+type ChatMessage = { role?: unknown; content?: unknown };
+type MarketAsset = Pick<AssetSearchResult, 'symbol' | 'name'>;
+type CandidateEntry =
+  | { index: number; kind: 'explicit'; symbol: string; name: string }
+  | { index: number; kind: 'alias'; symbol: string; name: string }
+  | { index: number; kind: 'name'; name: string; fallbackNames?: string[] };
+type MarketToolEvent = {
+  name: 'get_quote'; assetName: string; symbol: string; status: 'success' | 'error';
+  source?: string; asOf?: string; observedAt?: string | null; fetchedAt?: string | null;
+  ageSeconds?: number | null; delay?: string; currency?: string; errorCode?: string;
+};
+type GatewayQuoteResult = {
+  ok: boolean;
+  data?: { price?: unknown; changePercent?: unknown; currency?: unknown };
+  error?: { code?: unknown };
+  meta?: Record<string, unknown>;
+};
+type MarketGateway = { getQuote(symbol: string): Promise<GatewayQuoteResult> };
+type ResolverResult = { ok: true; asset: MarketAsset } | { ok: false; errorCode: string } | MarketAsset | null;
+type MarketResolver = (name: string) => Promise<ResolverResult>;
+
+function errorCode(value: unknown): unknown {
+  return value !== null && typeof value === 'object' && 'code' in value ? (value as UnknownRecord).code : undefined;
+}
+
+function latestUserContent(messages: unknown): string {
   if (!Array.isArray(messages)) return '';
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -22,11 +49,11 @@ function latestUserContent(messages) {
   return '';
 }
 
-function safeErrorCode(code, fallback = 'provider_invalid_response') {
+function safeErrorCode(code: unknown, fallback = 'provider_invalid_response'): string {
   return typeof code === 'string' && SAFE_ERROR_CODE.test(code) ? code : fallback;
 }
 
-function unavailableContext(asset, errorCode) {
+function unavailableContext(asset: MarketAsset, errorCode: string): { message: { role: 'system'; content: string }; event: MarketToolEvent } {
   const symbol = asset.symbol;
   const assetName = asset.name ?? symbol;
   return {
@@ -38,7 +65,7 @@ function unavailableContext(asset, errorCode) {
   };
 }
 
-function successfulContext(asset, result) {
+function successfulContext(asset: MarketAsset, result: GatewayQuoteResult): { message: { role: 'system'; content: string }; event: MarketToolEvent } {
   const symbol = asset.symbol;
   const assetName = asset.name ?? symbol;
   const quoteSymbol = typeof result.meta?.symbol === 'string' ? result.meta.symbol : symbol;
@@ -58,11 +85,11 @@ function successfulContext(asset, result) {
   };
 }
 
-export function extractMarketSymbols(text) {
+export function extractMarketSymbols(text: unknown): string[] {
   if (typeof text !== 'string') return [];
 
-  const symbols = [];
-  const seen = new Set();
+  const symbols: string[] = [];
+  const seen = new Set<string>();
   const pattern = /(?<![A-Za-z0-9.])(?:\d{6}\.(?:SH|SZ)|\d{4,5}\.HK|[A-Z][A-Z0-9]{0,4}\.US|[A-Z][A-Z0-9]{1,14}\/[A-Z][A-Z0-9]{1,14}|[A-Z][A-Z0-9]{0,4})(?![A-Za-z0-9.])/g;
   for (const match of text.matchAll(pattern)) {
     const symbol = match[0];
@@ -76,15 +103,15 @@ export function extractMarketSymbols(text) {
   return symbols;
 }
 
-export function isMarketRequest(text) {
+export function isMarketRequest(text: unknown): boolean {
   return typeof text === 'string' && (MARKET_INTENT.test(text) || extractMarketSymbols(text).length > 0);
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function allAliasMatches(text) {
+function allAliasMatches(text: string): Extract<CandidateEntry, { kind: 'alias' }>[] {
   return INDEX_ALIASES.flatMap((alias) => alias.aliases.flatMap((term) => {
     const pattern = new RegExp(escapeRegExp(term), 'gu');
     return [...text.matchAll(pattern)].map((match) => ({
@@ -97,18 +124,18 @@ function allAliasMatches(text) {
   }));
 }
 
-function cleanChineseCandidate(value) {
+function cleanChineseCandidate(value: string): string {
   const withoutPrefix = value.replace(CANDIDATE_PREFIX, '');
   const withoutSuffix = withoutPrefix.replace(CANDIDATE_SUFFIX, '').replace(TIME_SUFFIX, '').replace(TRAILING_CONNECTOR, '');
   return withoutSuffix.trim();
 }
 
-function compoundHeErTaiFallbacks(name) {
+function compoundHeErTaiFallbacks(name: string): string[] {
   const match = name.match(/^(.{2,})和而(.+)$/u);
   return match ? [match[1], `和而${match[2]}`] : [];
 }
 
-function splitChineseCandidate(value) {
+function splitChineseCandidate(value: string): string[] {
   const parts = value.split(CANDIDATE_SEPARATOR).filter(Boolean);
   return parts.flatMap((part) => {
     for (let index = 1; index < part.length - 1; index += 1) {
@@ -124,7 +151,7 @@ function splitChineseCandidate(value) {
   });
 }
 
-function chineseNameCandidates(text, aliasMatches) {
+function chineseNameCandidates(text: string, aliasMatches: Extract<CandidateEntry, { kind: 'alias' }>[]): Extract<CandidateEntry, { kind: 'name' }>[] {
   const masked = text.replace(/\bA股/gu, '  ').split('');
   for (const { index, length } of aliasMatches) {
     for (let position = index; position < index + length; position += 1) masked[position] = ' ';
@@ -145,7 +172,7 @@ function chineseNameCandidates(text, aliasMatches) {
   });
 }
 
-function bareCodeCandidates(text) {
+function bareCodeCandidates(text: string): Extract<CandidateEntry, { kind: 'name' }>[] {
   return [...text.matchAll(/(?<!\d)\d{6}(?![\d.])/g)].map((match) => ({
     index: match.index,
     kind: 'name',
@@ -153,8 +180,8 @@ function bareCodeCandidates(text) {
   }));
 }
 
-function uniqueCandidateEntries(entries) {
-  const seen = new Set();
+function uniqueCandidateEntries(entries: CandidateEntry[]): CandidateEntry[] {
+  const seen = new Set<string>();
   return entries.filter((entry) => {
     const key = `${entry.kind}:${entry.name}`;
     if (seen.has(key)) return false;
@@ -163,7 +190,7 @@ function uniqueCandidateEntries(entries) {
   }).slice(0, MAX_SYMBOLS);
 }
 
-function normalizedCnSymbol(symbol) {
+function normalizedCnSymbol(symbol: unknown): string | null {
   try {
     const normalized = normalizeSymbol(symbol);
     return normalized.market === 'cn' ? normalized.canonical : null;
