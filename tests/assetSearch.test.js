@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { createMarketSearchHandler } from '../server/market/search-api.js';
 import {
   buildEastmoneySuggestUrl,
   buildTencentSuggestUrl,
@@ -403,6 +405,24 @@ test('asset search returns no results for invalid provider input or provider fai
   assert.deepEqual(await search('unknown symbol'), []);
 });
 
+test('asset search stops before later providers when the client aborts', async () => {
+  const controller = new AbortController();
+  const requestedUrls = [];
+  const search = createAssetSearch({
+    fetchImpl: async (url, options) => {
+      requestedUrls.push(String(url));
+      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    }
+  });
+  const pending = search('未知资产', { signal: controller.signal });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  assert.deepEqual(await pending, { ok: false, errorCode: 'request_aborted' });
+  assert.equal(requestedUrls.length, 1);
+});
+
 test('searchAssets requests the search endpoint and returns only server results', async () => {
   const originalFetch = globalThis.fetch;
   const controller = new AbortController();
@@ -419,6 +439,17 @@ test('searchAssets requests the search endpoint and returns only server results'
   }
 });
 
+test('searchAssets preserves the server cancellation response as an AbortError', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ errorCode: 'request_aborted' }), { status: 499 });
+
+  try {
+    await assert.rejects(searchAssets('Apple'), { name: 'AbortError' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('financial search renders remote results and selection sets the active research symbol', async () => {
   const source = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
 
@@ -429,4 +460,26 @@ test('financial search renders remote results and selection sets the active rese
   assert.match(source, /setAssetResults\(\[\]\)/);
   assert.match(source, /aria-live="polite"/);
   assert.match(source, /onKeyDown=\{handleAssetSearchKeyDown\}/);
+});
+
+test('market search endpoint forwards client cancellation and returns an explicit cancelled response', async () => {
+  let receivedSignal;
+  const handler = createMarketSearchHandler(async (_query, { signal }) => {
+    receivedSignal = signal;
+    return new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, errorCode: 'request_aborted' }), { once: true }));
+  });
+  const req = Object.assign(new EventEmitter(), { query: { q: 'Apple' } });
+  const res = Object.assign(new EventEmitter(), {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; }
+  });
+
+  const pending = handler(req, res);
+  req.emit('aborted');
+  await pending;
+
+  assert.equal(receivedSignal.aborted, true);
+  assert.equal(res.statusCode, 499);
+  assert.deepEqual(res.body, { errorCode: 'request_aborted' });
 });

@@ -10,11 +10,6 @@ import { ChatWindow } from './components/ChatWindow.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { FinancialWorkspace } from './components/FinancialWorkspace.jsx';
 
-const systemPrompt = {
-  role: 'system',
-  content: '你是一个用于学习 AI Agent 前端开发的助手，回答要简洁、结构清晰。'
-};
-
 export default function App() {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState(null);
@@ -166,9 +161,9 @@ export default function App() {
 
     try {
       const financialContext = financialMode
-        ? { role: 'system', content: `金融工作台：${financialTab}；当前资产：${financialSymbol}。仅基于工具结果陈述市场数据或事件。` }
-        : null;
-      const payload = buildModelMessages([systemPrompt, financialContext, ...activeMessages, userMessage].filter(Boolean), 6000);
+        ? { financial: { tab: financialTab, symbol: financialSymbol } }
+        : undefined;
+      const payload = buildModelMessages([...activeMessages, userMessage], 6000);
       let assistantText = '';
       function appendToolEvent(event) {
         assistantToolEvents = [...assistantToolEvents, event];
@@ -197,7 +192,7 @@ export default function App() {
           )));
         },
         onDone() {}
-      });
+      }, financialContext);
       await put('messages', { ...assistantMessage, content: assistantText, status: 'done', toolEvents: assistantToolEvents, updatedAt: now() });
       setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, status: 'done' } : item)));
     } catch (err) {

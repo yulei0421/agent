@@ -672,3 +672,87 @@ test('normalizes invalid cache TTL values to the finite default', async () => {
     Date.now = originalDateNow;
   }
 });
+
+test('cancels an in-flight market provider request immediately when the client aborts', async () => {
+  const controller = new AbortController();
+  let receivedSignal;
+  const gateway = createMarketGateway({
+    fetchImpl: async (_url, options) => {
+      receivedSignal = options.signal;
+      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    }
+  });
+  const pending = gateway.getQuote('AAPL', { signal: controller.signal });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'request_aborted');
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test('keeps a shared market fetch alive when an earlier caller aborts', async () => {
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+  let fetchCalls = 0;
+  let completeFetch;
+  let providerSignal;
+  const gateway = createMarketGateway({
+    fetchImpl: async (_url, options) => {
+      fetchCalls += 1;
+      providerSignal = options.signal;
+      return new Promise((resolve) => { completeFetch = resolve; });
+    }
+  });
+
+  const first = gateway.getQuote('AAPL', { signal: firstController.signal });
+  const second = gateway.getQuote('AAPL', { signal: secondController.signal });
+  firstController.abort();
+
+  assert.equal((await first).error.code, 'request_aborted');
+  assert.equal(fetchCalls, 1);
+  assert.equal(providerSignal.aborted, false);
+  completeFetch(jsonResponse({
+    chart: { result: [{
+      meta: { regularMarketPrice: 210, previousClose: 200, currency: 'USD' },
+      timestamp: [1_720_000_000],
+      indicators: { quote: [{}] }
+    }] }
+  }));
+
+  assert.equal((await second).ok, true);
+  assert.equal(fetchCalls, 1);
+});
+
+test('starts a fresh market fetch when a new caller follows the last consumer abort', async () => {
+  const firstController = new AbortController();
+  let fetchCalls = 0;
+  let firstProviderSignal;
+  const gateway = createMarketGateway({
+    fetchImpl: async (_url, options) => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        firstProviderSignal = options.signal;
+        return new Promise(() => {});
+      }
+      return jsonResponse({
+        chart: { result: [{
+          meta: { regularMarketPrice: 210, previousClose: 200, currency: 'USD' },
+          timestamp: [1_720_000_000],
+          indicators: { quote: [{}] }
+        }] }
+      });
+    }
+  });
+
+  const first = gateway.getQuote('AAPL', { signal: firstController.signal });
+  firstController.abort();
+  const second = gateway.getQuote('AAPL');
+
+  assert.equal(firstProviderSignal.aborted, true);
+  assert.equal(fetchCalls, 2);
+  assert.equal((await first).error.code, 'request_aborted');
+  assert.equal((await second).ok, true);
+});

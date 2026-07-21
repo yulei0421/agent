@@ -56,10 +56,20 @@ function isValidQuery(query) {
   return typeof query === 'string' && query.trim().length > 0 && query.length <= MAX_QUERY_LENGTH;
 }
 
-async function fetchRss(fetchImpl, url, timeoutMs) {
+async function fetchRss(fetchImpl, url, timeoutMs, signal) {
+  if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
   const controller = new AbortController();
   let timeoutId;
+  let removeAbortListener = () => {};
   try {
+    const cancelled = new Promise((resolve) => {
+      const abort = () => {
+        controller.abort();
+        resolve({ aborted: true });
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      removeAbortListener = () => signal?.removeEventListener('abort', abort);
+    });
     const timeout = new Promise((resolve) => {
       timeoutId = setTimeout(() => {
         controller.abort();
@@ -68,19 +78,24 @@ async function fetchRss(fetchImpl, url, timeoutMs) {
     });
     const response = await Promise.race([
       fetchImpl(url, { method: 'GET', redirect: 'error', signal: controller.signal }),
-      timeout
+      timeout,
+      cancelled
     ]);
+    if (response?.aborted) return { ok: false, errorCode: 'request_aborted' };
     if (response?.timedOut) return { ok: false, errorCode: 'timeout' };
     if (!response || response.status !== 200 || !response.ok || typeof response.text !== 'function') {
       return { ok: false, errorCode: 'upstream_unavailable' };
     }
-    const text = await Promise.race([response.text(), timeout]);
+    const text = await Promise.race([response.text(), timeout, cancelled]);
+    if (text?.aborted) return { ok: false, errorCode: 'request_aborted' };
     if (text?.timedOut) return { ok: false, errorCode: 'timeout' };
     return { ok: true, text };
   } catch {
+    if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
     return { ok: false, errorCode: 'upstream_unavailable' };
   } finally {
     clearTimeout(timeoutId);
+    removeAbortListener();
   }
 }
 
@@ -89,12 +104,13 @@ export function buildGoogleNewsRssUrl(query) {
   return `${GOOGLE_NEWS_RSS_URL}?${params}`;
 }
 
-export async function searchWeb(query, { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, now = new Date() } = {}) {
+export async function searchWeb(query, { fetchImpl = fetch, timeoutMs = TIMEOUT_MS, now = new Date(), signal } = {}) {
+  if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
   if (!isValidQuery(query)) return { ok: false, errorCode: 'invalid_query' };
 
   const serverNow = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   const requestTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : TIMEOUT_MS;
-  const response = await fetchRss(fetchImpl, buildGoogleNewsRssUrl(query), requestTimeoutMs);
+  const response = await fetchRss(fetchImpl, buildGoogleNewsRssUrl(query), requestTimeoutMs, signal);
   if (!response.ok) return response;
 
   try {

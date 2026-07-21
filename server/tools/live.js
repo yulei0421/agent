@@ -88,9 +88,19 @@ function toObservedAt(currentTime, utcOffsetSeconds) {
   return new Date(localTimeMs - (utcOffsetSeconds * 1000));
 }
 
-async function fetchJson(fetchImpl, url, timeoutMs = TIMEOUT_MS) {
+async function fetchJson(fetchImpl, url, timeoutMs = TIMEOUT_MS, signal) {
+  if (signal?.aborted) throw new LiveToolError('request_aborted');
   const controller = new AbortController();
   let timeoutId;
+  let removeAbortListener = () => {};
+  const cancelled = new Promise((resolve) => {
+    const abort = () => {
+      controller.abort();
+      resolve({ aborted: true });
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    removeAbortListener = () => signal?.removeEventListener('abort', abort);
+  });
   const timeout = new Promise((resolve) => {
     timeoutId = setTimeout(() => {
       controller.abort();
@@ -101,19 +111,24 @@ async function fetchJson(fetchImpl, url, timeoutMs = TIMEOUT_MS) {
   try {
     const response = await Promise.race([
       fetchImpl(url, { method: 'GET', redirect: 'error', signal: controller.signal }),
-      timeout
+      timeout,
+      cancelled
     ]);
+    if (response?.aborted) throw new LiveToolError('request_aborted');
     if (response?.timedOut) throw new LiveToolError('timeout');
     if (!response?.ok || typeof response.json !== 'function') throw new LiveToolError('unavailable');
 
-    const body = await Promise.race([response.json(), timeout]);
+    const body = await Promise.race([response.json(), timeout, cancelled]);
+    if (body?.aborted) throw new LiveToolError('request_aborted');
     if (body?.timedOut) throw new LiveToolError('timeout');
     return body;
   } catch (error) {
     if (error instanceof LiveToolError) throw error;
+    if (signal?.aborted) throw new LiveToolError('request_aborted');
     throw new LiveToolError('unavailable');
   } finally {
     clearTimeout(timeoutId);
+    removeAbortListener();
   }
 }
 
@@ -170,7 +185,8 @@ export function buildWeatherUrl(latitude, longitude, timeZone) {
   return `${WEATHER_ORIGIN}?${params}`;
 }
 
-export async function resolveLiveContext({ ip, content, fetchImpl = fetch, now = () => new Date() }) {
+export async function resolveLiveContext({ ip, content, fetchImpl = fetch, now = () => new Date(), signal } = {}) {
+  if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
   if (!isLiveDataRequest(content)) return { ok: true, date: formatLocalDate(now(), DEFAULT_TIME_ZONE) };
 
   const serverNow = now();
@@ -192,18 +208,19 @@ export async function resolveLiveContext({ ip, content, fetchImpl = fetch, now =
       };
       timeZone = builtInLocation.timeZone;
     } else if (requestedCity) {
-      const geocoding = await fetchJson(fetchImpl, buildGeocodingUrl(requestedCity));
+      const geocoding = await fetchJson(fetchImpl, buildGeocodingUrl(requestedCity), TIMEOUT_MS, signal);
       const result = geocoding?.results?.[0];
       if (!validGeocodingLocation(result)) return { ok: false, errorCode: 'location_unavailable' };
       location = { city: result.name.trim(), latitude: result.latitude, longitude: result.longitude };
       timeZone = result.timezone;
     } else {
-      const ipLocation = await fetchJson(fetchImpl, buildGeoUrl(ip));
+      const ipLocation = await fetchJson(fetchImpl, buildGeoUrl(ip), TIMEOUT_MS, signal);
       if (!validLocation(ipLocation)) return { ok: false, errorCode: 'location_unavailable' };
       location = { city: ipLocation.city.trim(), latitude: ipLocation.latitude, longitude: ipLocation.longitude };
       timeZone = validTimeZone(ipLocation.timezone?.id) ? ipLocation.timezone.id : DEFAULT_TIME_ZONE;
     }
-  } catch {
+  } catch (error) {
+    if (error?.code === 'request_aborted' || signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
     return { ok: false, errorCode: 'location_unavailable' };
   }
 
@@ -213,8 +230,9 @@ export async function resolveLiveContext({ ip, content, fetchImpl = fetch, now =
 
   let weather;
   try {
-    weather = await fetchJson(fetchImpl, buildWeatherUrl(location.latitude, location.longitude, timeZone));
-  } catch {
+    weather = await fetchJson(fetchImpl, buildWeatherUrl(location.latitude, location.longitude, timeZone), TIMEOUT_MS, signal);
+  } catch (error) {
+    if (error?.code === 'request_aborted' || signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
     return { ok: false, errorCode: 'weather_unavailable', date, timeZone, location: location.city };
   }
   if (!validWeather(weather?.current, weather?.utc_offset_seconds)) {

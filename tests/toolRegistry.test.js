@@ -30,6 +30,43 @@ test('publishes the four model tools with closed object schemas in a stable orde
   ]);
 });
 
+test('short-circuits pre-aborted execution without invoking a tool adapter', async () => {
+  let calls = 0;
+  const controller = new AbortController();
+  controller.abort();
+  const registry = createToolRegistry({
+    liveContext: async () => { calls += 1; return { ok: true }; }
+  });
+
+  assert.deepEqual(await registry.execute(
+    { name: 'get_weather', arguments: '{}' },
+    { signal: controller.signal }
+  ), {
+    ok: false,
+    name: 'get_weather',
+    errorCode: 'request_aborted'
+  });
+  assert.equal(calls, 0);
+});
+
+test('forwards the client abort signal to every registry adapter', async () => {
+  const controller = new AbortController();
+  const signals = [];
+  const registry = createToolRegistry({
+    liveContext: async (input) => { signals.push(input.signal); return { ok: true }; },
+    webSearch: async (_query, options) => { signals.push(options.signal); return { ok: true }; },
+    assetSearch: async (_query, options) => { signals.push(options.signal); return []; },
+    marketGateway: { getQuote: async (_symbol, options) => { signals.push(options.signal); return { ok: true, data: {}, meta: {} }; } }
+  });
+
+  await registry.execute({ name: 'get_weather', arguments: '{}' }, { signal: controller.signal });
+  await registry.execute({ name: 'search_news', arguments: '{"query":"市场"}' }, { signal: controller.signal });
+  await registry.execute({ name: 'search_asset', arguments: '{"query":"资产"}' }, { signal: controller.signal });
+  await registry.execute({ name: 'get_quote', arguments: '{"symbol":"AAPL"}' }, { signal: controller.signal });
+
+  assert.deepEqual(signals, [controller.signal, controller.signal, controller.signal, controller.signal]);
+});
+
 test('uses one field contract for published schemas and execution validation', async () => {
   const calls = [];
   const registry = createToolRegistry({

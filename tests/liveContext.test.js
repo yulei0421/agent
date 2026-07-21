@@ -204,3 +204,26 @@ test('rejects unsafe client IPs and reports upstream failures without returning 
   });
   assert.deepEqual(failedLocation, { ok: false, errorCode: 'location_unavailable' });
 });
+
+test('cancels a live location fetch immediately and skips the weather followup', async () => {
+  const controller = new AbortController();
+  let fetchCalls = 0;
+  let receivedSignal;
+  const pending = resolveLiveContext({
+    ip: '203.0.113.10',
+    content: '北京天气',
+    signal: controller.signal,
+    fetchImpl: async (_url, options) => {
+      fetchCalls += 1;
+      receivedSignal = options.signal;
+      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  assert.deepEqual(await pending, { ok: false, errorCode: 'request_aborted' });
+  assert.equal(receivedSignal.aborted, true);
+  assert.equal(fetchCalls, 1);
+});

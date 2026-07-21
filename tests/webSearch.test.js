@@ -89,7 +89,25 @@ test('searchWeb returns a structured timeout error without throwing when the RSS
   assert.deepEqual(result, { ok: false, errorCode: 'timeout' });
 });
 
-test('streamChat sends only model messages; the server selects registered tools', async () => {
+test('cancels a news request immediately when the client aborts', async () => {
+  const controller = new AbortController();
+  let receivedSignal;
+  const pending = searchWeb('平安银行', {
+    signal: controller.signal,
+    fetchImpl: async (_url, options) => {
+      receivedSignal = options.signal;
+      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+
+  assert.deepEqual(await pending, { ok: false, errorCode: 'request_aborted' });
+  assert.equal(receivedSignal.aborted, true);
+});
+
+test('streamChat sends model messages with an explicit financial request context', async () => {
   const originalFetch = globalThis.fetch;
   let requestBody;
   globalThis.fetch = async (_, options) => {
@@ -98,8 +116,16 @@ test('streamChat sends only model messages; the server selects registered tools'
   };
 
   try {
-    await streamChat([{ role: 'user', content: '平安银行' }], new AbortController().signal, {});
-    assert.deepEqual(requestBody, { messages: [{ role: 'user', content: '平安银行' }] });
+    await streamChat(
+      [{ role: 'user', content: '平安银行' }],
+      new AbortController().signal,
+      {},
+      { financial: { tab: 'markets', symbol: 'AAPL' } }
+    );
+    assert.deepEqual(requestBody, {
+      messages: [{ role: 'user', content: '平安银行' }],
+      context: { financial: { tab: 'markets', symbol: 'AAPL' } }
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

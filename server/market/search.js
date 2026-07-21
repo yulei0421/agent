@@ -18,6 +18,29 @@ const EASTMONEY_FETCH_OPTIONS = Object.freeze({
     Referer: 'https://www.eastmoney.com/'
   })
 });
+const ABORTED = Symbol('aborted');
+
+function waitForProvider(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      cleanup();
+      resolve(ABORTED);
+    };
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); }
+    );
+  });
+}
+
+function withSignal(options, signal) {
+  if (!signal) return options;
+  return { ...(options ?? {}), signal };
+}
 
 function normalizedQuery(query) {
   return typeof query === 'string' ? query.trim() : '';
@@ -367,31 +390,38 @@ function parseJsonp(text) {
   }
 }
 
-async function fetchJson(fetchImpl, url, options) {
+async function fetchJson(fetchImpl, url, options, signal) {
+  if (signal?.aborted) return ABORTED;
   try {
-    const response = await fetchImpl(url, options);
+    const response = await waitForProvider(fetchImpl(url, withSignal(options, signal)), signal);
+    if (response === ABORTED) return ABORTED;
     if (!response?.ok) return null;
     if (typeof response.text === 'function') {
-      const text = await response.text();
+      const text = await waitForProvider(response.text(), signal);
+      if (text === ABORTED) return ABORTED;
       try {
         return JSON.parse(text);
       } catch {
         return parseJsonp(text);
       }
     }
-    return typeof response.json === 'function' ? await response.json() : null;
+    const payload = typeof response.json === 'function' ? await waitForProvider(response.json(), signal) : null;
+    return payload === ABORTED ? ABORTED : payload;
   } catch {
-    return null;
+    return signal?.aborted ? ABORTED : null;
   }
 }
 
-async function fetchText(fetchImpl, url) {
+async function fetchText(fetchImpl, url, signal) {
+  if (signal?.aborted) return ABORTED;
   try {
-    const response = await fetchImpl(url);
+    const response = await waitForProvider(fetchImpl(url, withSignal(undefined, signal)), signal);
+    if (response === ABORTED) return ABORTED;
     if (!response?.ok || typeof response.text !== 'function') return null;
-    return await response.text();
+    const text = await waitForProvider(response.text(), signal);
+    return text === ABORTED ? ABORTED : text;
   } catch {
-    return null;
+    return signal?.aborted ? ABORTED : null;
   }
 }
 
@@ -405,9 +435,10 @@ function mergeResults(...resultSets) {
 }
 
 export function createAssetSearch({ fetchImpl = fetch } = {}) {
-  return async function searchAssets(query) {
+  return async function searchAssets(query, { signal } = {}) {
     const value = normalizedQuery(query);
     if (!value || value.length > 64) return [];
+    if (signal?.aborted) return { ok: false, errorCode: 'request_aborted' };
 
     // Normalize first, but let established aliases such as BTC keep their local meaning.
     const direct = directSymbolResult(value);
@@ -418,9 +449,12 @@ export function createAssetSearch({ fetchImpl = fetch } = {}) {
     }
     if (direct) return [direct];
 
-    const tencentText = await fetchText(fetchImpl, buildTencentSuggestUrl(value));
-    const eastmoneyPayload = await fetchJson(fetchImpl, buildEastmoneySuggestUrl(value), EASTMONEY_FETCH_OPTIONS);
-    const yahooPayload = await fetchJson(fetchImpl, buildYahooSearchUrl(value));
+    const tencentText = await fetchText(fetchImpl, buildTencentSuggestUrl(value), signal);
+    if (tencentText === ABORTED) return { ok: false, errorCode: 'request_aborted' };
+    const eastmoneyPayload = await fetchJson(fetchImpl, buildEastmoneySuggestUrl(value), EASTMONEY_FETCH_OPTIONS, signal);
+    if (eastmoneyPayload === ABORTED) return { ok: false, errorCode: 'request_aborted' };
+    const yahooPayload = await fetchJson(fetchImpl, buildYahooSearchUrl(value), undefined, signal);
+    if (yahooPayload === ABORTED) return { ok: false, errorCode: 'request_aborted' };
     const tencentResults = parseTencentSuggest(tencentText);
     const eastmoneyResults = eastmoneyPayload ? parseEastmoneySuggest(eastmoneyPayload) : [];
     const yahooResults = Array.isArray(yahooPayload?.quotes) ? yahooPayload.quotes.map(toYahooResult).filter(Boolean) : [];

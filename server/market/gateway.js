@@ -6,6 +6,7 @@ import { buildTencentQuoteUrl, parseTencentQuote } from './providers/tencent.js'
 import { buildYahooUrl, parseYahooCandles, parseYahooQuote } from './providers/yahoo.js';
 
 const ERROR_MESSAGES = Object.freeze({
+  request_aborted: 'Market data request was cancelled.',
   provider_unavailable: 'Market data provider is unavailable.',
   provider_rate_limited: 'Market data provider rate limited the request.',
   provider_invalid_response: 'Market data provider returned an invalid response.',
@@ -28,10 +29,52 @@ function originIsAllowed(url) {
   return getAllowedOrigins().includes(new URL(url).origin);
 }
 
-async function fetchPayload(fetchImpl, url, timeoutMs, responseType = 'json') {
+function waitForRequest(entry, signal) {
+  if (signal?.aborted) return Promise.reject(marketError('request_aborted'));
+  return new Promise((resolve, reject) => {
+    const consumer = Symbol('market-request-consumer');
+    let settled = false;
+    entry.consumers.add(consumer);
+    const release = () => {
+      entry.consumers.delete(consumer);
+      if (!entry.finished && entry.consumers.size === 0) {
+        entry.retire();
+        entry.controller.abort();
+      }
+    };
+    const finish = (callback) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      release();
+      callback();
+    };
+    const abort = () => {
+      finish(() => reject(marketError('request_aborted')));
+    };
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    entry.request.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error))
+    );
+  });
+}
+
+async function awaitResult(entry, signal, config, symbol) {
+  try {
+    return cloneResult(await waitForRequest(entry, signal));
+  } catch (error) {
+    return failure(error, config, symbol);
+  }
+}
+
+async function fetchPayload(fetchImpl, url, timeoutMs, responseType = 'json', signal) {
   if (!originIsAllowed(url)) throw marketError('provider_not_available');
+  if (signal?.aborted) throw marketError('request_aborted');
   const controller = new AbortController();
   let timeoutId;
+  let removeAbortListener = () => {};
   const readPayload = async () => {
     let response;
     try {
@@ -49,18 +92,27 @@ async function fetchPayload(fetchImpl, url, timeoutMs, responseType = 'json') {
     }
   };
   try {
+    const cancelled = new Promise((_, reject) => {
+      const abort = () => {
+        controller.abort();
+        reject(marketError('request_aborted'));
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      removeAbortListener = () => signal?.removeEventListener('abort', abort);
+    });
     const timeout = new Promise((_, reject) => {
       timeoutId = setTimeout(() => {
         controller.abort();
         reject(marketError('provider_unavailable'));
       }, timeoutMs);
     });
-    return await Promise.race([readPayload(), timeout]);
+    return await Promise.race([readPayload(), timeout, cancelled]);
   } catch (error) {
     if (Object.hasOwn(ERROR_MESSAGES, error?.code)) throw error;
     throw marketError('provider_unavailable');
   } finally {
     clearTimeout(timeoutId);
+    removeAbortListener();
   }
 }
 
@@ -83,7 +135,9 @@ function failure(error, config = null, symbol = null, fallbackMessage) {
 function cloneResult(result, cached = result.meta.cached) {
   return {
     ...result,
-    data: Array.isArray(result.data) ? result.data.map((candle) => ({ ...candle })) : { ...result.data },
+    ...(Object.hasOwn(result, 'data')
+      ? { data: Array.isArray(result.data) ? result.data.map((candle) => ({ ...candle })) : { ...result.data } }
+      : {}),
     meta: { ...result.meta, cached }
   };
 }
@@ -139,7 +193,8 @@ export function createMarketGateway({
   const normalizedCacheTtlMs = Number.isFinite(cacheTtlMs) && cacheTtlMs >= 0 ? cacheTtlMs : 3000;
   const cacheLimit = Number.isInteger(maxCacheEntries) && maxCacheEntries >= 0 ? maxCacheEntries : 200;
 
-  async function execute(input, operation, parameters = {}) {
+  async function execute(input, operation, parameters = {}, signal) {
+    if (signal?.aborted) return failure(marketError('request_aborted'));
     let symbol;
     let config;
     try {
@@ -156,16 +211,26 @@ export function createMarketGateway({
       return cloneResult(cached.result, true);
     }
 
-    const pending = inFlight.get(cacheKey);
-    if (pending) return cloneResult(await pending);
+    let entry = inFlight.get(cacheKey);
+    if (entry) return awaitResult(entry, signal, config, symbol.canonical);
 
+    const controller = new AbortController();
+    entry = {
+      controller,
+      consumers: new Set(),
+      finished: false,
+      request: null,
+      retire() {
+        if (inFlight.get(cacheKey) === entry) inFlight.delete(cacheKey);
+      }
+    };
     const request = (async () => {
       let activeConfig = config;
       try {
       let parsed;
       let freshness;
       if (config.provider === 'yahoo-finance') {
-        const payload = await fetchPayload(fetchImpl, buildYahooUrl(symbol.providerSymbol, parameters), requestTimeoutMs);
+        const payload = await fetchPayload(fetchImpl, buildYahooUrl(symbol.providerSymbol, parameters), requestTimeoutMs, 'json', controller.signal);
         parsed = operation === 'quote' ? parseYahooQuote(payload) : parseYahooCandles(payload);
         freshness = operation === 'quote' ? quoteFreshness(parsed, serverTimestamp(now)) : null;
       } else if (config.provider === 'eastmoney') {
@@ -173,28 +238,28 @@ export function createMarketGateway({
           return failure(marketError('provider_not_available'), config, symbol.canonical, 'Candles are not available for this market.');
         }
         try {
-          parsed = parseEastmoneyQuote(await fetchPayload(fetchImpl, buildEastmoneyUrl(symbol.providerSymbol), requestTimeoutMs));
+          parsed = parseEastmoneyQuote(await fetchPayload(fetchImpl, buildEastmoneyUrl(symbol.providerSymbol), requestTimeoutMs, 'json', controller.signal));
           freshness = quoteFreshness(parsed, serverTimestamp(now));
         } catch (error) {
           if (!isRecoverableEastmoneyError(error)) throw error;
           activeConfig = TENCENT_FALLBACK_CONFIG;
-          parsed = parseTencentQuote(await fetchPayload(fetchImpl, buildTencentQuoteUrl(symbol), requestTimeoutMs, 'text'));
+          parsed = parseTencentQuote(await fetchPayload(fetchImpl, buildTencentQuoteUrl(symbol), requestTimeoutMs, 'text', controller.signal));
           freshness = quoteFreshness(parsed, serverTimestamp(now));
         }
       } else if (config.provider === 'tencent') {
         if (operation !== 'quote') {
           return failure(marketError('provider_not_available'), config, symbol.canonical, 'Candles are not available for this market.');
         }
-        parsed = parseTencentQuote(await fetchPayload(fetchImpl, buildTencentQuoteUrl(symbol), requestTimeoutMs, 'text'));
+        parsed = parseTencentQuote(await fetchPayload(fetchImpl, buildTencentQuoteUrl(symbol), requestTimeoutMs, 'text', controller.signal));
         freshness = quoteFreshness(parsed, serverTimestamp(now));
       } else if (config.provider === 'binance') {
         if (operation === 'quote') {
           const currency = symbol.canonical.split('/')[1];
-          parsed = parseBinanceQuote(await fetchPayload(fetchImpl, buildBinanceTickerUrl(symbol.providerSymbol), requestTimeoutMs), currency);
+          parsed = parseBinanceQuote(await fetchPayload(fetchImpl, buildBinanceTickerUrl(symbol.providerSymbol), requestTimeoutMs, 'json', controller.signal), currency);
           freshness = quoteFreshness(parsed, serverTimestamp(now));
         } else {
           const limit = getKlineLimit(parameters.range);
-          parsed = parseBinanceCandles(await fetchPayload(fetchImpl, buildBinanceKlinesUrl(symbol.providerSymbol, { interval: parameters.interval, limit }), requestTimeoutMs));
+          parsed = parseBinanceCandles(await fetchPayload(fetchImpl, buildBinanceKlinesUrl(symbol.providerSymbol, { interval: parameters.interval, limit }), requestTimeoutMs, 'json', controller.signal));
         }
       } else {
         throw marketError('provider_not_available');
@@ -228,20 +293,20 @@ export function createMarketGateway({
         return failure(error, activeConfig, symbol.canonical);
       }
     })();
-    inFlight.set(cacheKey, request);
-    try {
-      return await request;
-    } finally {
-      if (inFlight.get(cacheKey) === request) inFlight.delete(cacheKey);
-    }
+    entry.request = request.finally(() => {
+      entry.finished = true;
+      entry.retire();
+    });
+    inFlight.set(cacheKey, entry);
+    return awaitResult(entry, signal, config, symbol.canonical);
   }
 
   return {
-    getQuote(input) {
-      return execute(input, 'quote');
+    getQuote(input, { signal } = {}) {
+      return execute(input, 'quote', {}, signal);
     },
-    getCandles(input, { interval = '1h', range = '1d' } = {}) {
-      return execute(input, 'candles', { interval, range });
+    getCandles(input, { interval = '1h', range = '1d', signal } = {}) {
+      return execute(input, 'candles', { interval, range }, signal);
     }
   };
 }

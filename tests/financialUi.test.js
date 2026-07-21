@@ -80,6 +80,14 @@ test('App preserves early tool events on the streaming assistant message', async
   assert.match(source, /onToolResult\(event\)[\s\S]*appendToolEvent\(event\)/);
 });
 
+test('App sends financial mode as bounded request context instead of a client system message', async () => {
+  const source = await readSource('../src/App.jsx');
+
+  assert.match(source, /financialMode\s*\?\s*\{\s*financial:\s*\{\s*tab:\s*financialTab,\s*symbol:\s*financialSymbol\s*}\s*}\s*:\s*undefined/);
+  assert.match(source, /streamChat\(payload, abortRef\.current\.signal,[\s\S]*financialContext\)/);
+  assert.doesNotMatch(source, /role:\s*'system',\s*content:\s*`金融工作台/);
+});
+
 test('MessageItem renders generic registry events and result-backed tool cards', async () => {
   const source = await readSource('../src/components/MessageItem.jsx');
 

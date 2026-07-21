@@ -5,6 +5,7 @@ import { streamDeepSeek } from './deepseek.js';
 import { attachWebSocket } from './websocket.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
+import { createMarketSearchHandler } from './market/search-api.js';
 import { resolveLiveContext } from './tools/live.js';
 import { createToolRegistry } from './tools/registry.js';
 import { searchWeb } from './tools/web.js';
@@ -34,13 +35,7 @@ app.use((_, res, next) => {
 });
 app.options('/{*path}', (_, res) => res.sendStatus(204));
 app.get('/api/health', (_, res) => res.json({ ok: true }));
-app.get('/api/market/search', async (req, res) => {
-  const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-  if (!query || query.length > 64) {
-    return res.status(400).json({ error: 'q must contain 1 to 64 characters' });
-  }
-  return res.json({ results: await assetSearch(query) });
-});
+app.get('/api/market/search', createMarketSearchHandler(assetSearch));
 app.post('/api/chat/stream', (req, res) => streamDeepSeek(req, res, { toolRegistry }));
 
 const server = http.createServer(app);

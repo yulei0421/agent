@@ -1,8 +1,8 @@
-export async function streamChat(messages, signal, handlers) {
+export async function streamChat(messages, signal, handlers, context) {
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify(context ? { messages, context } : { messages }),
     signal
   });
 

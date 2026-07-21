@@ -42,6 +42,10 @@ function failure(name, errorCode) {
   return { ok: false, name: safeResultString(name) ? name : 'unknown', errorCode };
 }
 
+function isAborted(signal) {
+  return Boolean(signal?.aborted);
+}
+
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -204,6 +208,7 @@ export function createToolRegistry({
   async function execute(call, context = {}) {
     const parsed = parseCall(call);
     if (!parsed.ok) return parsed;
+    if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
 
     if (parsed.name === 'get_weather') {
       if (typeof liveContext !== 'function') return failure(parsed.name, 'tool_unavailable');
@@ -211,11 +216,14 @@ export function createToolRegistry({
         const response = await liveContext({
           ip: context.ip ?? '',
           content: parsed.arguments.city ? `${parsed.arguments.city}天气` : '天气',
-          now: context.now ?? now
+          now: context.now ?? now,
+          ...(context.signal ? { signal: context.signal } : {})
         });
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'weather_unavailable'));
         return { ok: true, name: parsed.name, result: normalizeWeather(response) };
       } catch (error) {
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         return failure(parsed.name, safeErrorCode(error?.code, 'weather_unavailable'));
       }
     }
@@ -223,10 +231,15 @@ export function createToolRegistry({
     if (parsed.name === 'search_news') {
       if (typeof webSearch !== 'function') return failure(parsed.name, 'tool_unavailable');
       try {
-        const response = await webSearch(parsed.arguments.query, { now: resolvedDate(context.now ?? now) });
+        const response = await webSearch(parsed.arguments.query, {
+          now: resolvedDate(context.now ?? now),
+          signal: context.signal
+        });
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'news_unavailable'));
         return { ok: true, name: parsed.name, result: normalizeNews(response) };
       } catch (error) {
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         return failure(parsed.name, safeErrorCode(error?.code, 'news_unavailable'));
       }
     }
@@ -234,7 +247,9 @@ export function createToolRegistry({
     if (parsed.name === 'search_asset') {
       if (typeof assetSearch !== 'function') return failure(parsed.name, 'not_found');
       try {
-        const assets = await assetSearch(parsed.arguments.query);
+        const assets = await assetSearch(parsed.arguments.query, { signal: context.signal });
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
+        if (assets?.errorCode === 'request_aborted') return failure(parsed.name, 'request_aborted');
         if (!Array.isArray(assets)) return failure(parsed.name, 'not_found');
         const result = assets
           .filter(isObject)
@@ -251,6 +266,7 @@ export function createToolRegistry({
           ? { ok: true, name: parsed.name, result }
           : failure(parsed.name, 'not_found');
       } catch {
+        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         return failure(parsed.name, 'not_found');
       }
     }
@@ -259,7 +275,8 @@ export function createToolRegistry({
       return failure(parsed.name, 'tool_unavailable');
     }
     try {
-      const response = await marketGateway.getQuote(parsed.arguments.symbol);
+      const response = await marketGateway.getQuote(parsed.arguments.symbol, { signal: context.signal });
+      if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
       if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.error?.code, 'provider_unavailable'));
       return {
         ok: true,
@@ -284,6 +301,7 @@ export function createToolRegistry({
         }
       };
     } catch (error) {
+      if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
       return failure(parsed.name, safeErrorCode(error?.code, 'provider_unavailable'));
     }
   }
