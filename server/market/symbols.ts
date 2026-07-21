@@ -1,8 +1,14 @@
-function invalidSymbol(input) {
+export interface NormalizedSymbol {
+  canonical: string;
+  market: 'crypto' | 'cn' | 'hk' | 'us';
+  providerSymbol: string;
+}
+
+function invalidSymbol(input: unknown): never {
   throw new Error(`Invalid market symbol: ${String(input)}`);
 }
 
-export function normalizeSymbol(input) {
+export function normalizeSymbol(input: unknown): NormalizedSymbol {
   if (typeof input !== 'string') {
     return invalidSymbol(input);
   }
@@ -31,19 +37,23 @@ export function normalizeSymbol(input) {
 
   const hkMatch = symbol.match(/^(\d{4,5})\.HK$/);
   if (hkMatch) {
+    const code = hkMatch[1];
+    if (!code) return invalidSymbol(input);
     return {
-      canonical: `${hkMatch[1]}.HK`,
+      canonical: `${code}.HK`,
       market: 'hk',
-      providerSymbol: `${hkMatch[1]}.HK`
+      providerSymbol: `${code}.HK`
     };
   }
 
   const usMatch = symbol.match(/^([A-Z][A-Z0-9]{0,14})(?:\.US)?$/);
   if (usMatch) {
+    const code = usMatch[1];
+    if (!code) return invalidSymbol(input);
     return {
-      canonical: `${usMatch[1]}.US`,
+      canonical: `${code}.US`,
       market: 'us',
-      providerSymbol: usMatch[1]
+      providerSymbol: code
     };
   }
 

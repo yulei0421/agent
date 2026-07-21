@@ -42,7 +42,10 @@ const server = http.createServer(app);
 attachWebSocket(server);
 
 server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === 'EADDRINUSE') {
     console.error(`端口 ${port} 已被占用。请先停止旧的 demo 进程，或修改 .env 里的 PORT。`);
     process.exit(1);
   }

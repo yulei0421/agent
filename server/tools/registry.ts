@@ -1,8 +1,37 @@
 import { isIP } from 'node:net';
+import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult, ToolRegistry } from '../types.js';
 
 const OMIT = Symbol('omit');
+type OmitValue = typeof OMIT;
+type UnknownRecord = Record<string, unknown>;
+type ToolName = 'get_weather' | 'search_news' | 'search_asset' | 'get_quote';
+type FieldRule = { maxLength: number; required: boolean };
+type ToolContract = { description: string; fields: Record<string, FieldRule> };
+type Normalizer = (value: unknown) => unknown | OmitValue;
 
-const TOOL_CONTRACTS = Object.freeze({
+interface LiveContextInput {
+  ip: string;
+  content: string;
+  now: () => Date;
+  signal?: AbortSignal;
+}
+
+interface RegistryDependencies {
+  liveContext?: (input: LiveContextInput) => Promise<UnknownRecord | undefined>;
+  webSearch?: (query: string, options: { now: Date; signal?: AbortSignal }) => Promise<UnknownRecord | undefined>;
+  assetSearch?: (query: string, options: { signal?: AbortSignal }) => Promise<unknown>;
+  marketGateway?: {
+    getQuote(symbol: string, options: { signal?: AbortSignal }): Promise<UnknownRecord | undefined>;
+  };
+  now?: () => Date;
+}
+
+type ParsedCall =
+  | { ok: true; name: ToolName; arguments: Record<string, string> }
+  | { ok: false; name: string; errorCode: string };
+type ToolFailure = Extract<ToolExecutionResult, { ok: false }>;
+
+const TOOL_CONTRACTS: Readonly<Record<ToolName, ToolContract>> = Object.freeze({
   get_weather: {
     description: '查询指定城市或当前用户所在地的实时天气。',
     fields: { city: { maxLength: 64, required: false } }
@@ -21,45 +50,49 @@ const TOOL_CONTRACTS = Object.freeze({
   }
 });
 
-const TOOL_DEFINITIONS = Object.freeze(Object.entries(TOOL_CONTRACTS).map(([name, contract]) => ({
-  type: 'function',
-  function: {
-    name,
-    description: contract.description,
-    parameters: {
-      type: 'object',
-      properties: Object.fromEntries(Object.entries(contract.fields)
-        .map(([field, rule]) => [field, { type: 'string', maxLength: rule.maxLength }])),
-      ...(Object.values(contract.fields).some((rule) => rule.required)
-        ? { required: Object.entries(contract.fields).filter(([, rule]) => rule.required).map(([field]) => field) }
-        : {}),
-      additionalProperties: false
+const TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze(
+  (Object.entries(TOOL_CONTRACTS) as [ToolName, ToolContract][]).map<ToolDefinition>(([name, contract]) => ({
+    type: 'function',
+    function: {
+      name,
+      description: contract.description,
+      parameters: {
+        type: 'object',
+        properties: Object.fromEntries(
+          Object.entries(contract.fields).map(([field, rule]) => [field, { type: 'string', maxLength: rule.maxLength }])
+        ),
+        ...(Object.values(contract.fields).some((rule) => rule.required)
+          ? { required: Object.entries(contract.fields).filter(([, rule]) => rule.required).map(([field]) => field) }
+          : {}),
+        additionalProperties: false
+      }
     }
-  }
-})));
+  }))
+);
 
-function failure(name, errorCode) {
+function isToolName(value: string): value is ToolName {
+  return Object.hasOwn(TOOL_CONTRACTS, value);
+}
+
+function failure(name: unknown, errorCode: string): ToolFailure {
   return { ok: false, name: safeResultString(name) ? name : 'unknown', errorCode };
 }
 
-function isAborted(signal) {
+function isAborted(signal: AbortSignal | undefined): boolean {
   return Boolean(signal?.aborted);
 }
 
-function isObject(value) {
+function isObject(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseCall(call) {
-  const name = call?.name;
-  if (typeof name !== 'string' || !Object.hasOwn(TOOL_CONTRACTS, name)) {
-    return failure(name, 'unknown_tool');
-  }
-  if (typeof call?.arguments !== 'string') return failure(name, 'invalid_arguments');
+function parseCall(call: ToolCall): ParsedCall {
+  const name = call.name;
+  if (!isToolName(name)) return failure(name, 'unknown_tool');
 
-  let argumentsValue;
+  let argumentsValue: unknown;
   try {
-    argumentsValue = JSON.parse(call.arguments);
+    argumentsValue = JSON.parse(call.arguments) as unknown;
   } catch {
     return failure(name, 'invalid_arguments');
   }
@@ -76,14 +109,18 @@ function parseCall(call) {
       return failure(name, 'invalid_arguments');
     }
   }
-  return { ok: true, name, arguments: argumentsValue };
+  return { ok: true, name, arguments: argumentsValue as Record<string, string> };
 }
 
-function safeErrorCode(value, fallback) {
+function errorCode(value: unknown): string | undefined {
+  return isObject(value) && typeof value.code === 'string' ? value.code : undefined;
+}
+
+function safeErrorCode(value: unknown, fallback: string): string {
   return safeResultString(value) && value.length <= 100 ? value : fallback;
 }
 
-function hasIpLiteral(value) {
+function hasIpLiteral(value: string): boolean {
   const ipv4Literals = value.match(/\d{1,3}(?:\.\d{1,3}){3}/gu) ?? [];
   if (ipv4Literals.some((literal) => isIP(literal) !== 0)) return true;
   const tokens = value.match(/[0-9A-Fa-f:.]+/gu) ?? [];
@@ -100,7 +137,7 @@ function hasIpLiteral(value) {
   });
 }
 
-function safeResultString(value) {
+function safeResultString(value: unknown): value is string {
   if (typeof value !== 'string' || value.trim().length === 0) return false;
   return !/(?:^|[^\p{L}\p{N}])[A-Za-z][A-Za-z0-9+.-]*:\/{1,2}\S/u.test(value)
     && !/(?:^|[^\p{L}\p{N}])(?:data|mailto|tel|urn|javascript):\S/iu.test(value)
@@ -108,27 +145,29 @@ function safeResultString(value) {
     && !hasIpLiteral(value);
 }
 
-function text(value, maxLength = 200) {
+function text(value: unknown, maxLength = 200): string | OmitValue {
   return safeResultString(value) && value.length <= maxLength ? value : OMIT;
 }
 
-function stableId(value, maxLength = 128) {
-  return text(value, maxLength) !== OMIT && /^[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(value) ? value : OMIT;
+function stableId(value: unknown, maxLength = 128): string | OmitValue {
+  const normalized = text(value, maxLength);
+  return normalized !== OMIT && /^[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(normalized) ? normalized : OMIT;
 }
 
-function isoTimestamp(value) {
-  if (text(value, 40) === OMIT) return OMIT;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value ? value : OMIT;
+function isoTimestamp(value: unknown): string | OmitValue {
+  const normalized = text(value, 40);
+  if (normalized === OMIT) return OMIT;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === normalized ? normalized : OMIT;
 }
 
-function localDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value ?? '')) return OMIT;
+function localDate(value: unknown): string | OmitValue {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return OMIT;
   const timestamp = Date.parse(`${value}T00:00:00.000Z`);
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString().startsWith(value) ? value : OMIT;
 }
 
-function boundedNumber(value, min, max, integer = false) {
+function boundedNumber(value: unknown, min: number, max: number, integer = false): number | OmitValue {
   return typeof value === 'number'
     && Number.isFinite(value)
     && value >= min
@@ -138,25 +177,27 @@ function boundedNumber(value, min, max, integer = false) {
     : OMIT;
 }
 
-function strictBoolean(value) {
+function strictBoolean(value: unknown): boolean | OmitValue {
   return typeof value === 'boolean' ? value : OMIT;
 }
 
-function normalizeFields(value, normalizers) {
+function normalizeFields(value: unknown, normalizers: Record<string, Normalizer>): UnknownRecord {
   if (!isObject(value)) return {};
-  return Object.fromEntries(Object.entries(normalizers)
-    .filter(([field]) => Object.hasOwn(value, field))
-    .map(([field, normalize]) => [field, normalize(value[field])])
-    .filter(([, normalized]) => normalized !== OMIT));
+  return Object.fromEntries(
+    Object.entries(normalizers)
+      .filter(([field]) => Object.hasOwn(value, field))
+      .map(([field, normalize]) => [field, normalize(value[field])])
+      .filter(([, normalized]) => normalized !== OMIT)
+  );
 }
 
-function resolvedDate(value) {
+function resolvedDate(value: unknown): Date {
   const candidate = typeof value === 'function' ? value() : value;
   return candidate instanceof Date && !Number.isNaN(candidate.getTime()) ? candidate : new Date();
 }
 
-function normalizeNews(response) {
-  const result = {};
+function normalizeNews(response: UnknownRecord): UnknownRecord {
+  const result: UnknownRecord = {};
   if (Array.isArray(response.sources)) {
     result.sources = response.sources
       .filter(isObject)
@@ -166,17 +207,16 @@ function normalizeNews(response) {
         publishedAt: isoTimestamp
       }));
   }
-  const metadata = normalizeFields(response, {
+  Object.assign(result, normalizeFields(response, {
     serverTime: isoTimestamp,
     latestPublishedAt: isoTimestamp,
     latestAgeSeconds: (value) => boundedNumber(value, 0, 315360000)
-  });
-  Object.assign(result, metadata);
+  }));
   return result;
 }
 
-function normalizeWeather(response) {
-  const result = {};
+function normalizeWeather(response: UnknownRecord): UnknownRecord {
+  const result: UnknownRecord = {};
   const weather = normalizeFields(response.weather, {
     city: (value) => text(value, 128),
     observedAt: isoTimestamp,
@@ -189,12 +229,11 @@ function normalizeWeather(response) {
     source: (value) => stableId(value, 128)
   });
   if (Object.keys(weather).length > 0) result.weather = weather;
-  const context = normalizeFields(response, {
+  Object.assign(result, normalizeFields(response, {
     location: (value) => text(value, 128),
     date: localDate,
     serverTime: isoTimestamp
-  });
-  Object.assign(result, context);
+  }));
   return result;
 }
 
@@ -204,14 +243,14 @@ export function createToolRegistry({
   marketGateway,
   assetSearch,
   now = () => new Date()
-} = {}) {
-  async function execute(call, context = {}) {
+}: RegistryDependencies = {}): ToolRegistry {
+  async function execute(call: ToolCall, context: ToolExecutionContext = {}): Promise<ToolExecutionResult> {
     const parsed = parseCall(call);
     if (!parsed.ok) return parsed;
     if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
 
     if (parsed.name === 'get_weather') {
-      if (typeof liveContext !== 'function') return failure(parsed.name, 'tool_unavailable');
+      if (!liveContext) return failure(parsed.name, 'tool_unavailable');
       try {
         const response = await liveContext({
           ip: context.ip ?? '',
@@ -222,34 +261,34 @@ export function createToolRegistry({
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'weather_unavailable'));
         return { ok: true, name: parsed.name, result: normalizeWeather(response) };
-      } catch (error) {
+      } catch (caught) {
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        return failure(parsed.name, safeErrorCode(error?.code, 'weather_unavailable'));
+        return failure(parsed.name, safeErrorCode(errorCode(caught), 'weather_unavailable'));
       }
     }
 
     if (parsed.name === 'search_news') {
-      if (typeof webSearch !== 'function') return failure(parsed.name, 'tool_unavailable');
+      if (!webSearch) return failure(parsed.name, 'tool_unavailable');
       try {
-        const response = await webSearch(parsed.arguments.query, {
+        const response = await webSearch(parsed.arguments.query ?? '', {
           now: resolvedDate(context.now ?? now),
           signal: context.signal
         });
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'news_unavailable'));
         return { ok: true, name: parsed.name, result: normalizeNews(response) };
-      } catch (error) {
+      } catch (caught) {
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        return failure(parsed.name, safeErrorCode(error?.code, 'news_unavailable'));
+        return failure(parsed.name, safeErrorCode(errorCode(caught), 'news_unavailable'));
       }
     }
 
     if (parsed.name === 'search_asset') {
-      if (typeof assetSearch !== 'function') return failure(parsed.name, 'not_found');
+      if (!assetSearch) return failure(parsed.name, 'not_found');
       try {
-        const assets = await assetSearch(parsed.arguments.query, { signal: context.signal });
+        const assets = await assetSearch(parsed.arguments.query ?? '', { signal: context.signal });
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        if (assets?.errorCode === 'request_aborted') return failure(parsed.name, 'request_aborted');
+        if (isObject(assets) && assets.errorCode === 'request_aborted') return failure(parsed.name, 'request_aborted');
         if (!Array.isArray(assets)) return failure(parsed.name, 'not_found');
         const result = assets
           .filter(isObject)
@@ -262,22 +301,18 @@ export function createToolRegistry({
           }))
           .filter((asset) => Object.keys(asset).length > 0)
           .slice(0, 5);
-        return result.length > 0
-          ? { ok: true, name: parsed.name, result }
-          : failure(parsed.name, 'not_found');
+        return result.length > 0 ? { ok: true, name: parsed.name, result } : failure(parsed.name, 'not_found');
       } catch {
         if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
         return failure(parsed.name, 'not_found');
       }
     }
 
-    if (!marketGateway || typeof marketGateway.getQuote !== 'function') {
-      return failure(parsed.name, 'tool_unavailable');
-    }
+    if (!marketGateway) return failure(parsed.name, 'tool_unavailable');
     try {
-      const response = await marketGateway.getQuote(parsed.arguments.symbol, { signal: context.signal });
+      const response = await marketGateway.getQuote(parsed.arguments.symbol ?? '', { signal: context.signal });
       if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-      if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.error?.code, 'provider_unavailable'));
+      if (!response?.ok) return failure(parsed.name, safeErrorCode(isObject(response?.error) ? response.error.code : undefined, 'provider_unavailable'));
       return {
         ok: true,
         name: parsed.name,
@@ -300,9 +335,9 @@ export function createToolRegistry({
           })
         }
       };
-    } catch (error) {
+    } catch (caught) {
       if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-      return failure(parsed.name, safeErrorCode(error?.code, 'provider_unavailable'));
+      return failure(parsed.name, safeErrorCode(errorCode(caught), 'provider_unavailable'));
     }
   }
 
