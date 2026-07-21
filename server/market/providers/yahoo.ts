@@ -1,18 +1,17 @@
 const ORIGIN = 'https://query1.finance.yahoo.com';
+type UnknownRecord = Record<string, unknown>;
 
-function invalidResponse() {
-  const error = new Error('Yahoo returned an unexpected response.');
-  error.code = 'provider_invalid_response';
-  return error;
+function invalidResponse(): Error & { code: string } {
+  return Object.assign(new Error('Yahoo returned an unexpected response.'), { code: 'provider_invalid_response' });
 }
 
-function asNumber(value) {
+function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function quoteFromChart(result) {
-  const meta = result?.meta;
-  const price = asNumber(meta?.regularMarketPrice);
+function quoteFromChart(result: UnknownRecord) {
+  const meta: UnknownRecord = result.meta !== null && typeof result.meta === 'object' && !Array.isArray(result.meta) ? result.meta as UnknownRecord : {};
+  const price = asNumber(meta.regularMarketPrice);
   if (price === null) throw invalidResponse();
 
   const previousClose = asNumber(meta.previousClose);
@@ -23,12 +22,12 @@ function quoteFromChart(result) {
       : null,
     currency: typeof meta.currency === 'string' ? meta.currency : null,
     asOf: Array.isArray(result.timestamp) && Number.isFinite(result.timestamp.at(-1))
-      ? new Date(result.timestamp.at(-1) * 1000).toISOString()
+      ? new Date((result.timestamp.at(-1) as number) * 1000).toISOString()
       : null
   };
 }
 
-function candlesFromChart(result) {
+function candlesFromChart(result: UnknownRecord) {
   const timestamps = result?.timestamp;
   const quote = result?.indicators?.quote?.[0];
   if (!Array.isArray(timestamps) || timestamps.length === 0 || !quote || !Array.isArray(quote.open) || !Array.isArray(quote.high)
@@ -50,18 +49,27 @@ function candlesFromChart(result) {
   });
 }
 
-export function buildYahooUrl(symbol, { interval = '1d', range = '1d' } = {}) {
+export function buildYahooUrl(symbol: string, { interval = '1d', range = '1d' }: { interval?: string; range?: string } = {}): string {
   return `${ORIGIN}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}&range=${encodeURIComponent(range)}`;
 }
 
-export function parseYahooQuote(payload) {
-  const result = payload?.chart?.result?.[0];
+function chartResult(payload: unknown): UnknownRecord | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const chart = (payload as UnknownRecord).chart;
+  if (!chart || typeof chart !== 'object' || Array.isArray(chart)) return null;
+  const result = (chart as UnknownRecord).result;
+  const first = Array.isArray(result) ? result[0] : null;
+  return first && typeof first === 'object' && !Array.isArray(first) ? first as UnknownRecord : null;
+}
+
+export function parseYahooQuote(payload: unknown) {
+  const result = chartResult(payload);
   if (!result) throw invalidResponse();
   return quoteFromChart(result);
 }
 
-export function parseYahooCandles(payload) {
-  const result = payload?.chart?.result?.[0];
+export function parseYahooCandles(payload: unknown) {
+  const result = chartResult(payload);
   if (!result) throw invalidResponse();
   return candlesFromChart(result);
 }
