@@ -9,8 +9,8 @@ export function createPlanningGraph(planner: Planner) {
   });
 
   return new StateGraph(AgentStateAnnotation)
-    .addNode('plan', planNode)
-    .addEdge(START, 'plan')
-    .addEdge('plan', END)
+    .addNode('plan_request', planNode)
+    .addEdge(START, 'plan_request')
+    .addEdge('plan_request', END)
     .compile();
 }
