@@ -28,23 +28,34 @@ function quoteFromChart(result: UnknownRecord) {
 }
 
 function candlesFromChart(result: UnknownRecord) {
-  const timestamps = result?.timestamp;
-  const quote = result?.indicators?.quote?.[0];
+  const timestamps = result.timestamp;
+  const indicators = result.indicators !== null && typeof result.indicators === 'object' && !Array.isArray(result.indicators)
+    ? result.indicators as UnknownRecord
+    : {};
+  const quote = Array.isArray(indicators.quote) && indicators.quote[0] !== null && typeof indicators.quote[0] === 'object' && !Array.isArray(indicators.quote[0])
+    ? indicators.quote[0] as UnknownRecord
+    : null;
   if (!Array.isArray(timestamps) || timestamps.length === 0 || !quote || !Array.isArray(quote.open) || !Array.isArray(quote.high)
     || !Array.isArray(quote.low) || !Array.isArray(quote.close) || !Array.isArray(quote.volume)) {
     throw invalidResponse();
   }
+  const opens = quote.open;
+  const highs = quote.high;
+  const lows = quote.low;
+  const closes = quote.close;
+  const volumes = quote.volume;
 
   return timestamps.map((timestamp, index) => {
-    const values = [timestamp, quote.open[index], quote.high[index], quote.low[index], quote.close[index], quote.volume[index]];
+    const values = [timestamp, opens[index], highs[index], lows[index], closes[index], volumes[index]].map((value) => asNumber(value) ?? Number.NaN);
     if (!values.every(Number.isFinite)) throw invalidResponse();
+    const [time = Number.NaN, open = Number.NaN, high = Number.NaN, low = Number.NaN, close = Number.NaN, volume = Number.NaN] = values;
     return {
-      time: new Date(timestamp * 1000).toISOString(),
-      open: quote.open[index],
-      high: quote.high[index],
-      low: quote.low[index],
-      close: quote.close[index],
-      volume: quote.volume[index]
+      time: new Date(time * 1000).toISOString(),
+      open,
+      high,
+      low,
+      close,
+      volume
     };
   });
 }
