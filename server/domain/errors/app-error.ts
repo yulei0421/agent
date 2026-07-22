@@ -16,7 +16,7 @@ const STATUS_BY_CODE: Readonly<Record<AppErrorCode, number>> = Object.freeze({
 });
 
 export class AppError extends Error {
-  constructor(readonly code: AppErrorCode, message = code) {
+  constructor(readonly code: AppErrorCode, message: string = code) {
     super(message);
     this.name = 'AppError';
   }

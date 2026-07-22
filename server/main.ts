@@ -14,7 +14,7 @@ export async function createApp(environment: NodeJS.ProcessEnv = process.env): P
     allowedHeaders: ['Content-Type'],
     methods: ['GET', 'POST', 'OPTIONS']
   });
-  if (config.trustProxy) app.set('trust proxy', 1);
+  if (config.trustProxy) app.getHttpAdapter().getInstance().set('trust proxy', 1);
   return app;
 }
 

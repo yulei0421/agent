@@ -27,7 +27,9 @@ test('normalizes valid server configuration', () => {
 test('builds the Nest application without opening a network listener', async () => {
   const app = await createApp({
     PORT: '8787',
-    CLIENT_URL: 'http://127.0.0.1:5173'
+    CLIENT_URL: 'http://127.0.0.1:5173',
+    TRUST_PROXY: 'true'
   });
+  assert.equal(app.getHttpAdapter().getInstance().get('trust proxy'), 1);
   await app.close();
 });
