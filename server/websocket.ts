@@ -1,7 +1,11 @@
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 
-export function attachWebSocket(server: Server): void {
+export interface WebSocketAttachment {
+  close(): Promise<void>;
+}
+
+export function attachWebSocket(server: Server): WebSocketAttachment {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   wss.on('connection', (socket) => {
@@ -22,10 +26,17 @@ export function attachWebSocket(server: Server): void {
     });
   });
 
-  setInterval(() => {
+  const heartbeat = setInterval(() => {
     const payload = JSON.stringify({ type: 'notice', message: 'server heartbeat', at: Date.now() });
     for (const client of wss.clients) {
       if (client.readyState === client.OPEN) client.send(payload);
     }
   }, 15000).unref();
+
+  return {
+    close: async () => {
+      clearInterval(heartbeat);
+      await new Promise<void>((resolve, reject) => wss.close((error) => error ? reject(error) : resolve()));
+    }
+  };
 }

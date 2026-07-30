@@ -4,7 +4,7 @@ import test from 'node:test';
 import { buildGoogleNewsRssUrl, searchWeb } from '../server/tools/web.js';
 import { streamChat } from '../src/lib/chat.js';
 
-function rssResponse(text, status = 200) {
+function rssResponse(text: string, status = 200) {
   return { ok: status === 200, status, text: async () => text };
 }
 
@@ -56,6 +56,8 @@ test('searchWeb sorts sources by the latest publish time and excludes future tim
     now: new Date('2026-07-15T10:00:00.000Z')
   });
 
+  assert.equal(result.ok, true);
+  if (!result.ok || !Array.isArray(result.sources)) return;
   assert.deepEqual(result.sources.map((source) => source.title), ['最新新闻', '较早新闻']);
   assert.equal(result.latestPublishedAt, '2026-07-15T09:30:00.000Z');
   assert.equal(result.latestAgeSeconds, 1800);
@@ -91,12 +93,14 @@ test('searchWeb returns a structured timeout error without throwing when the RSS
 
 test('cancels a news request immediately when the client aborts', async () => {
   const controller = new AbortController();
-  let receivedSignal;
+  let receivedSignal: AbortSignal | undefined;
   const pending = searchWeb('平安银行', {
     signal: controller.signal,
-    fetchImpl: async (_url, options) => {
-      receivedSignal = options.signal;
-      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    fetchImpl: async (_url, options = {}) => {
+      const signal = options.signal;
+      if (!signal) throw new Error('expected an abort signal');
+      receivedSignal = signal;
+      return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
     }
   });
 
@@ -104,16 +108,16 @@ test('cancels a news request immediately when the client aborts', async () => {
   controller.abort();
 
   assert.deepEqual(await pending, { ok: false, errorCode: 'request_aborted' });
-  assert.equal(receivedSignal.aborted, true);
+  assert.equal(receivedSignal?.aborted, true);
 });
 
 test('streamChat sends model messages with an explicit financial request context', async () => {
   const originalFetch = globalThis.fetch;
-  let requestBody;
-  globalThis.fetch = async (_, options) => {
-    requestBody = JSON.parse(options.body);
+  let requestBody: unknown;
+  globalThis.fetch = (async (_input, options?: RequestInit) => {
+    requestBody = JSON.parse(String(options?.body ?? ''));
     return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { status: 200 });
-  };
+  }) as typeof fetch;
 
   try {
     await streamChat(
@@ -132,16 +136,17 @@ test('streamChat sends model messages with an explicit financial request context
 });
 
 test('the server creates one model-directed registry and the UI renders its generic result shape', async () => {
-  const [serverSource, windowSource, appSource, itemSource] = await Promise.all([
-    readFile(new URL('../server/index.ts', import.meta.url), 'utf8'),
+  const [moduleSource, adapterSource, windowSource, appSource, itemSource] = await Promise.all([
+    readFile(new URL('../server/app.module.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../server/infrastructure/tools/tool-registry.adapter.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/ChatWindow.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/App.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/components/MessageItem.tsx', import.meta.url), 'utf8')
   ]);
 
-  assert.match(serverSource, /createToolRegistry\(\{[\s\S]*liveContext: resolveLiveContext,[\s\S]*webSearch: searchWeb,[\s\S]*marketGateway,[\s\S]*assetSearch/);
-  assert.match(serverSource, /streamDeepSeek\(req, res, \{ toolRegistry \}\)/);
-  assert.doesNotMatch(serverSource, /streamDeepSeek\(req, res, \{ marketGateway \}\)/);
+  assert.match(moduleSource, /createToolRegistryExecutor\(\{[\s\S]*assetSearch,[\s\S]*liveContext: resolveLiveContext,[\s\S]*marketGateway: createMarketGateway\(\),[\s\S]*webSearch: searchWeb/);
+  assert.match(moduleSource, /ChatApplicationService/);
+  assert.match(adapterSource, /createToolRegistry\(dependencies\)/);
   assert.doesNotMatch(windowSource, /自动联网|固定数据源/);
   assert.doesNotMatch(appSource, /webSearch/);
   assert.match(itemSource, /event\.type === 'tool'/);

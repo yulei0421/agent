@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createMarketSearchHandler } from '../server/market/search-api.js';
+import { createMarketSearchHandler } from '../server/legacy/market-search.handler.js';
 import {
   buildEastmoneySuggestUrl,
   buildTencentSuggestUrl,
@@ -60,7 +60,7 @@ test('asset search resolves canonical and provider symbols directly without a pr
 });
 
 test('Tencent smartbox uses a fixed URL and parses real Chinese stock suggestions before fallbacks', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const realSmartboxHint = String.raw`v_hint="sz~000001~\u5e73\u5b89\u94f6\u884c~payh~GP-A^hk~00700~\u817e\u8baf\u63a7\u80a1~txkg~GP^sh~601857~\u4e2d\u56fd\u77f3\u6cb9~zgsy~GP-A^hk~00857~\u4e2d\u56fd\u77f3\u6cb9\u80a1\u4efd~zgsygf~GP^sz~399001~\u6df1\u8bc1\u6210\u6307~szcz~ZS^sh~510300~\u6caa\u6df1300ETF~hs300~ZQ"`;
   const search = createAssetSearch({
     fetchImpl: async (url) => {
@@ -89,11 +89,11 @@ test('Tencent smartbox uses a fixed URL and parses real Chinese stock suggestion
 test('Tencent smartbox rejects non-assignment JavaScript without executing it', async () => {
   assert.deepEqual(parseTencentSuggest('globalThis.smartboxWasExecuted = true'), []);
   assert.deepEqual(parseTencentSuggest('v_hint="sz~000001~平安银行~payh~GP"; globalThis.smartboxWasExecuted = true'), []);
-  assert.equal(globalThis.smartboxWasExecuted, undefined);
+  assert.equal((globalThis as typeof globalThis & { smartboxWasExecuted?: unknown }).smartboxWasExecuted, undefined);
 });
 
 test('asset search uses fixed Eastmoney and Yahoo URLs and filters unrecognized provider symbols', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
@@ -120,7 +120,7 @@ test('asset search uses fixed Eastmoney and Yahoo URLs and filters unrecognized 
 });
 
 test('Eastmoney suggest uses a fixed URL and parses common A and H stock result formats', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
@@ -136,13 +136,14 @@ test('Eastmoney suggest uses a fixed URL and parses common A and H stock result 
     { symbol: '000001.SZ', name: '平安银行', market: 'cn', type: 'stock', source: 'eastmoney-suggest' },
     { symbol: '0700.HK', name: '腾讯控股', market: 'hk', type: 'stock', source: 'eastmoney-suggest' }
   ]);
-  assert.equal(requestedUrls[0], 'https://smartbox.gtimg.cn/s3/?t=all&q=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com');
-  assert.equal(requestedUrls[1], 'https://searchapi.eastmoney.com/api/suggest/get?input=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com&type=14');
-  assert.equal(requestedUrls[2], 'https://query1.finance.yahoo.com/v1/finance/search?q=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com');
+  const [tencentUrl, eastmoneyUrl, yahooUrl] = requestedUrls;
+  assert.equal(tencentUrl, 'https://smartbox.gtimg.cn/s3/?t=all&q=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com');
+  assert.equal(eastmoneyUrl, 'https://searchapi.eastmoney.com/api/suggest/get?input=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com&type=14');
+  assert.equal(yahooUrl, 'https://query1.finance.yahoo.com/v1/finance/search?q=%E5%B9%B3%E5%AE%89%E9%93%B6%E8%A1%8C%3Fhost%3Dexample.com');
 });
 
 test('resolves a Chinese A-share name through only the fixed Eastmoney suggest endpoint', async () => {
-  const requestedUrls = [];
+  const requestedUrls: { url: string; options?: RequestInit }[] = [];
   const result = await resolveChineseAssetName('贵州茅台', async (url, options) => {
     requestedUrls.push({ url: String(url), options });
     return new Response(JSON.stringify({ result: { data: [{
@@ -152,12 +153,14 @@ test('resolves a Chinese A-share name through only the fixed Eastmoney suggest e
 
   assert.deepEqual(result, { symbol: '600519.SH', name: '贵州茅台', market: 'cn' });
   assert.deepEqual(requestedUrls.map(({ url }) => url), [buildEastmoneySuggestUrl('贵州茅台')]);
-  assert.match(requestedUrls[0].options.headers['User-Agent'], /Mozilla/);
-  assert.equal(requestedUrls[0].options.headers.Referer, 'https://www.eastmoney.com/');
+  const [request] = requestedUrls;
+  assert.ok(request);
+  assert.match((request.options?.headers as Record<string, string>)['User-Agent'] ?? '', /Mozilla/);
+  assert.equal((request.options?.headers as Record<string, string>).Referer, 'https://www.eastmoney.com/');
 });
 
 test('Chinese asset resolver falls back to Tencent when Eastmoney has no exact mainland name', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const result = await resolveChineseAssetNameWithStatus('贵州茅台', async (url) => {
     requestedUrls.push(String(url));
     if (String(url).startsWith('https://searchapi.eastmoney.com')) {
@@ -179,7 +182,7 @@ test('Chinese asset resolver falls back to Tencent when Eastmoney has no exact m
 });
 
 test('Chinese asset resolver does not call Tencent after an exact Eastmoney mainland match', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const result = await resolveChineseAssetNameWithStatus('贵州茅台', async (url) => {
     requestedUrls.push(String(url));
     if (String(url).startsWith('https://smartbox.gtimg.cn')) {
@@ -237,9 +240,9 @@ test('Chinese asset resolver accepts a matching bare six-digit code without gues
 });
 
 test('Chinese asset resolver supplies an abort signal to bound the fixed Eastmoney request', async () => {
-  let signal;
+  let signal: AbortSignal | undefined;
   await resolveChineseAssetName('贵州茅台', async (_, options) => {
-    signal = options.signal;
+    signal = options?.signal ?? undefined;
     return new Response(JSON.stringify({ result: { data: [] } }), { status: 200 });
   });
 
@@ -262,11 +265,11 @@ test('Chinese asset resolver status distinguishes provider failure from an exact
 
 test('Chinese asset resolver de-duplicates concurrent successful lookups and caches only the success', async () => {
   let fetchCalls = 0;
-  let completeFetch;
+  let completeFetch: ((response: Response) => void) | undefined;
   const resolver = createChineseAssetNameResolver({
     fetchImpl: () => {
       fetchCalls += 1;
-      return new Promise((resolve) => { completeFetch = resolve; });
+      return new Promise<Response>((resolve) => { completeFetch = resolve; });
     },
     cacheTtlMs: 60_000
   });
@@ -274,6 +277,7 @@ test('Chinese asset resolver de-duplicates concurrent successful lookups and cac
   const first = resolver('贵州茅台');
   const second = resolver('贵州茅台');
   assert.equal(fetchCalls, 1);
+  assert.ok(completeFetch);
   completeFetch(new Response(JSON.stringify({ result: { data: [{ Code: '600519', Name: '贵州茅台', Market: 'SH' }] } }), { status: 200 }));
 
   assert.deepEqual(await first, { ok: true, asset: { symbol: '600519.SH', name: '贵州茅台', market: 'cn' } });
@@ -299,7 +303,7 @@ test('Chinese asset resolver does not cache failed lookups', async () => {
 });
 
 test('Eastmoney suggest uses fixed browser headers for a real QuotationCodeTable response', async () => {
-  const requests = [];
+  const requests: { url: string; options?: RequestInit }[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url, options) => {
       requests.push({ url: String(url), options });
@@ -316,13 +320,19 @@ test('Eastmoney suggest uses fixed browser headers for a real QuotationCodeTable
   assert.deepEqual(await search('000001'), [{
     symbol: '000001.SZ', name: '平安银行', market: 'cn', type: 'stock', source: 'eastmoney-suggest'
   }]);
-  assert.equal(requests[0].url, buildTencentSuggestUrl('000001'));
-  assert.equal(requests[0].options, undefined);
-  assert.equal(requests[1].url, buildEastmoneySuggestUrl('000001'));
-  assert.match(requests[1].options.headers['User-Agent'], /Mozilla/);
-  assert.equal(requests[1].options.headers.Referer, 'https://www.eastmoney.com/');
-  assert.equal(requests[2].url, 'https://query1.finance.yahoo.com/v1/finance/search?q=000001');
-  assert.equal(requests[2].options?.headers?.Referer, undefined);
+  const [tencentRequest, eastmoneyRequest, yahooRequest] = requests;
+  assert.ok(tencentRequest);
+  assert.ok(eastmoneyRequest);
+  assert.ok(yahooRequest);
+  assert.equal(tencentRequest.url, buildTencentSuggestUrl('000001'));
+  assert.equal(tencentRequest.options, undefined);
+  assert.equal(eastmoneyRequest.url, buildEastmoneySuggestUrl('000001'));
+  const eastmoneyHeaders = eastmoneyRequest.options?.headers as Record<string, string> | undefined;
+  assert.ok(eastmoneyHeaders);
+  assert.match(eastmoneyHeaders['User-Agent'] ?? '', /Mozilla/);
+  assert.equal(eastmoneyHeaders.Referer, 'https://www.eastmoney.com/');
+  assert.equal(yahooRequest.url, 'https://query1.finance.yahoo.com/v1/finance/search?q=000001');
+  assert.equal((yahooRequest.options?.headers as Record<string, string> | undefined)?.Referer, undefined);
 });
 
 test('Eastmoney suggest parses a JSONP text response for mainland codes', async () => {
@@ -341,7 +351,7 @@ test('Eastmoney suggest parses a JSONP text response for mainland codes', async 
 });
 
 test('Tencent and Eastmoney failures fall back to Yahoo for exact mainland codes', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
@@ -375,7 +385,7 @@ test('asset search keeps Eastmoney results first and de-duplicates matching Yaho
 });
 
 test('asset search limits merged provider results to ten and keeps provider origins fixed for hostile queries', async () => {
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url) => {
       requestedUrls.push(String(url));
@@ -389,6 +399,7 @@ test('asset search limits merged provider results to ten and keeps provider orig
   });
 
   const results = await search('x?input=https://attacker.example/path');
+  assert.ok(Array.isArray(results));
   assert.equal(results.length, 10);
   assert.deepEqual(requestedUrls.map((url) => new URL(url).origin), [
     'https://smartbox.gtimg.cn',
@@ -407,11 +418,13 @@ test('asset search returns no results for invalid provider input or provider fai
 
 test('asset search stops before later providers when the client aborts', async () => {
   const controller = new AbortController();
-  const requestedUrls = [];
+  const requestedUrls: string[] = [];
   const search = createAssetSearch({
     fetchImpl: async (url, options) => {
       requestedUrls.push(String(url));
-      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+      const requestSignal = options?.signal;
+      if (!requestSignal) throw new Error('request signal is required');
+      return new Promise<Response>((_, reject) => requestSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
     }
   });
   const pending = search('未知资产', { signal: controller.signal });
@@ -428,7 +441,7 @@ test('searchAssets requests the search endpoint and returns only server results'
   const controller = new AbortController();
   globalThis.fetch = async (url, options) => {
     assert.equal(url, '/api/market/search?q=Apple');
-    assert.equal(options.signal, controller.signal);
+    assert.equal(options?.signal, controller.signal);
     return new Response(JSON.stringify({ results: [{ symbol: 'AAPL', name: 'Apple' }] }), { status: 200 });
   };
 
@@ -463,22 +476,24 @@ test('financial search renders remote results and selection sets the active rese
 });
 
 test('market search endpoint forwards client cancellation and returns an explicit cancelled response', async () => {
-  let receivedSignal;
+  let receivedSignal: AbortSignal | undefined;
   const handler = createMarketSearchHandler(async (_query, { signal }) => {
     receivedSignal = signal;
-    return new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, errorCode: 'request_aborted' }), { once: true }));
+    return new Promise((resolve) => signal?.addEventListener('abort', () => resolve({ ok: false, errorCode: 'request_aborted' }), { once: true }));
   });
   const req = Object.assign(new EventEmitter(), { query: { q: 'Apple' } });
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
-    status(code) { this.statusCode = code; return this; },
-    json(body) { this.body = body; return this; }
+    body: undefined as unknown,
+    status(code: number) { res.statusCode = code; return res; },
+    json(body: unknown) { res.body = body; return res; }
   });
 
   const pending = handler(req, res);
   req.emit('aborted');
   await pending;
 
+  assert.ok(receivedSignal);
   assert.equal(receivedSignal.aborted, true);
   assert.equal(res.statusCode, 499);
   assert.deepEqual(res.body, { errorCode: 'request_aborted' });

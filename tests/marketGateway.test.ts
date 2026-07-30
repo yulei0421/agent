@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createMarketGateway } from '../server/market/gateway.js';
+import { createMarketGateway, type MarketResult } from '../server/market/gateway.js';
 import { buildTencentQuoteUrl, parseTencentQuote } from '../server/market/providers/tencent.js';
+import type { FetchResponseLike } from '../server/market/types.js';
 
-function jsonResponse(body, { status = 200 } = {}) {
+function jsonResponse(body: unknown, { status = 200 }: { status?: number } = {}): FetchResponseLike {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -11,7 +12,7 @@ function jsonResponse(body, { status = 200 } = {}) {
   };
 }
 
-function textResponse(body, { status = 200 } = {}) {
+function textResponse(body: string, { status = 200 }: { status?: number } = {}): FetchResponseLike {
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -27,7 +28,7 @@ function tencentQuote({
   previousClose,
   date = '20260717',
   time = '153000'
-}) {
+}: { prefix: string; name: string; code: string; price: number; previousClose: number; date?: string; time?: string }) {
   const fields = ['51', name, code, String(price), String(previousClose)];
   fields[30] = date;
   fields[31] = time;
@@ -35,7 +36,7 @@ function tencentQuote({
 }
 
 test('gets a normalized Yahoo US quote from the fixed Chart API URL', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -68,12 +69,14 @@ test('gets a normalized Yahoo US quote from the fixed Chart API URL', async () =
     }
   });
   assert.equal(requests.length, 1);
-  assert.match(requests[0], /^https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/AAPL\?/);
-  assert.match(requests[0], /interval=1d/);
+  const [request] = requests;
+  assert.ok(request);
+  assert.match(request, /^https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/AAPL\?/);
+  assert.match(request, /interval=1d/);
 });
 
 test('prefers a valid Eastmoney CN quote before the Tencent fallback', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -84,6 +87,7 @@ test('prefers a valid Eastmoney CN quote before the Tencent fallback', async () 
 
   const result = await gateway.getQuote('600519.SH');
 
+  assert.ok(result.ok);
   assert.deepEqual(result.data, { price: 1578.9, changePercent: 1.23, currency: 'CNY' });
   assert.equal(result.meta.source, 'eastmoney');
   assert.deepEqual(requests, [
@@ -92,7 +96,7 @@ test('prefers a valid Eastmoney CN quote before the Tencent fallback', async () 
 });
 
 test('requests and normalizes the Eastmoney provider observation time with server freshness metadata', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -103,7 +107,10 @@ test('requests and normalizes the Eastmoney provider observation time with serve
 
   const result = await gateway.getQuote('600519.SH');
 
-  assert.match(requests[0], /fields=f43,f170,f58,f124/);
+  const [request] = requests;
+  assert.ok(request);
+  assert.match(request, /fields=f43,f170,f58,f124/);
+  assert.ok(result.ok);
   assert.equal(result.meta.observedAt, '2026-07-18T03:15:00.000Z');
   assert.equal(result.meta.asOf, '2026-07-18T03:15:00.000Z');
   assert.equal(result.meta.fetchedAt, '2026-07-18T03:20:00.000Z');
@@ -111,7 +118,7 @@ test('requests and normalizes the Eastmoney provider observation time with serve
 });
 
 test('rejects a future Eastmoney observation and falls back under the configured provider rules', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -149,7 +156,7 @@ test('keeps an Eastmoney quote observation time unknown instead of using the gat
 
 test('falls back to Tencent when Eastmoney omits or corrupts its change percent', async () => {
   for (const f170 of [undefined, 'not-a-percent']) {
-    const requests = [];
+    const requests: string[] = [];
     const gateway = createMarketGateway({
       fetchImpl: async (url) => {
         requests.push(url);
@@ -173,13 +180,13 @@ test('falls back to Tencent when Eastmoney omits or corrupts its change percent'
 });
 
 test('aborts a timed-out Eastmoney request before falling back to Tencent', async () => {
-  let eastmoneySignal;
-  const requests = [];
+  let eastmoneySignal: AbortSignal | undefined;
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: (url, options = {}) => {
       requests.push(url);
       if (url.startsWith('https://push2.eastmoney.com/')) {
-        eastmoneySignal = options.signal;
+        eastmoneySignal = options.signal ?? undefined;
         return new Promise((resolve, reject) => {
           options.signal?.addEventListener('abort', () => reject(new Error('request aborted')));
         });
@@ -193,6 +200,7 @@ test('aborts a timed-out Eastmoney request before falling back to Tencent', asyn
 
   assert.equal(result.ok, true);
   assert.equal(result.meta.source, 'tencent');
+  assert.ok(eastmoneySignal);
   assert.equal(eastmoneySignal.aborted, true);
   assert.deepEqual(requests, [
     'https://push2.eastmoney.com/api/qt/stock/get?secid=1.600519&fields=f43,f170,f58,f124',
@@ -201,7 +209,7 @@ test('aborts a timed-out Eastmoney request before falling back to Tencent', asyn
 });
 
 test('falls back to Tencent when Eastmoney returns an invalid CN quote', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -215,6 +223,7 @@ test('falls back to Tencent when Eastmoney returns an invalid CN quote', async (
 
   const result = await gateway.getQuote('600519.SH');
 
+  assert.ok(result.ok);
   assert.deepEqual(result.data, { price: 1578.9, changePercent: (1578.9 - 1559.72) / 1559.72 * 100, currency: 'CNY' });
   assert.equal(result.meta.source, 'tencent');
   assert.deepEqual(requests, [
@@ -228,7 +237,7 @@ test('falls back to Tencent when Eastmoney has a network error or 5xx response',
     async () => { throw new TypeError('network unavailable'); },
     async () => jsonResponse({}, { status: 503 })
   ]) {
-    const requests = [];
+    const requests: string[] = [];
     const gateway = createMarketGateway({
       fetchImpl: async (url) => {
         requests.push(url);
@@ -250,7 +259,7 @@ test('falls back to Tencent when Eastmoney has a network error or 5xx response',
 });
 
 test('does not bypass Eastmoney rate limits through Tencent', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -269,9 +278,9 @@ test('does not bypass Eastmoney rate limits through Tencent', async () => {
 });
 
 test('builds Tencent quote URLs with fixed exchange prefixes', () => {
-  assert.equal(buildTencentQuoteUrl({ canonical: '000001.SZ', market: 'cn' }), 'https://qt.gtimg.cn/q=sz000001');
-  assert.equal(buildTencentQuoteUrl({ canonical: '600519.SH', market: 'cn' }), 'https://qt.gtimg.cn/q=sh600519');
-  assert.equal(buildTencentQuoteUrl({ canonical: '0700.HK', market: 'hk' }), 'https://qt.gtimg.cn/q=hk00700');
+  assert.equal(buildTencentQuoteUrl({ canonical: '000001.SZ', market: 'cn', providerSymbol: '000001.SZ' }), 'https://qt.gtimg.cn/q=sz000001');
+  assert.equal(buildTencentQuoteUrl({ canonical: '600519.SH', market: 'cn', providerSymbol: '600519.SS' }), 'https://qt.gtimg.cn/q=sh600519');
+  assert.equal(buildTencentQuoteUrl({ canonical: '0700.HK', market: 'hk', providerSymbol: '0700.HK' }), 'https://qt.gtimg.cn/q=hk00700');
 });
 
 test('parses Tencent CN and HK quote strings with response timestamps', () => {
@@ -306,7 +315,7 @@ test('rejects empty and non-numeric Tencent quote strings', () => {
 });
 
 test('gets normalized Eastmoney Shenzhen and Tencent Hong Kong quotes from fixed endpoints', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -321,6 +330,8 @@ test('gets normalized Eastmoney Shenzhen and Tencent Hong Kong quotes from fixed
   const shenzhen = await gateway.getQuote('000001.sz');
   const hongKong = await gateway.getQuote('0700.hk');
 
+  assert.ok(shenzhen.ok);
+  assert.ok(hongKong.ok);
   assert.deepEqual(shenzhen.data, { price: 12.34, changePercent: -0.56, currency: 'CNY' });
   assert.equal(shenzhen.meta.source, 'eastmoney');
   assert.equal(shenzhen.meta.symbol, '000001.SZ');
@@ -348,7 +359,7 @@ test('keeps Tencent observation time unknown when the provider does not supply i
 });
 
 test('gets a normalized Binance crypto quote from the fixed ticker URL', async () => {
-  const requests = [];
+  const requests: string[] = [];
   const gateway = createMarketGateway({
     fetchImpl: async (url) => {
       requests.push(url);
@@ -363,7 +374,9 @@ test('gets a normalized Binance crypto quote from the fixed ticker URL', async (
   assert.deepEqual(result.data, { price: 60000.25, changePercent: -2.5, currency: 'USDT' });
   assert.equal(result.meta.source, 'binance');
   assert.equal(result.meta.asOf, '2024-07-03T09:46:40.000Z');
-  assert.match(requests[0], /^https:\/\/api\.binance\.com\/api\/v3\/ticker\/24hr\?symbol=BTCUSDT$/);
+  const [request] = requests;
+  assert.ok(request);
+  assert.match(request, /^https:\/\/api\.binance\.com\/api\/v3\/ticker\/24hr\?symbol=BTCUSDT$/);
 });
 
 test('gets Binance candles from the fixed klines URL', async () => {
@@ -413,17 +426,18 @@ test('caches an Eastmoney quote without inventing an observation time', async ()
 
 test('de-duplicates concurrent quote requests and caches only successful results', async () => {
   let fetchCalls = 0;
-  let completeFetch;
+  let completeFetch: ((response: FetchResponseLike) => void) | undefined;
   const gateway = createMarketGateway({
     fetchImpl: () => {
       fetchCalls += 1;
-      return new Promise((resolve) => { completeFetch = resolve; });
+      return new Promise<FetchResponseLike>((resolve) => { completeFetch = resolve; });
     }
   });
 
   const first = gateway.getQuote('BTC/USDT');
   const second = gateway.getQuote('BTC/USDT');
   assert.equal(fetchCalls, 1);
+  assert.ok(completeFetch);
   completeFetch(jsonResponse({ lastPrice: '100', priceChangePercent: '0', closeTime: 1_720_000_000_000 }));
 
   assert.equal((await first).ok, true);
@@ -510,10 +524,11 @@ test('returns provider_invalid_response for empty Yahoo and Binance candle array
   });
   const binanceGateway = createMarketGateway({ fetchImpl: async () => jsonResponse([]) });
 
-  for (const [gateway, symbol, source, delay] of [
+  const gateways: [ReturnType<typeof createMarketGateway>, string, string, string][] = [
     [yahooGateway, 'AAPL', 'yahoo-finance', 'unknown'],
     [binanceGateway, 'BTC/USDT', 'binance', 'exchange']
-  ]) {
+  ];
+  for (const [gateway, symbol, source, delay] of gateways) {
     const result = await gateway.getCandles(symbol);
     assert.deepEqual(result, {
       ok: false,
@@ -588,9 +603,13 @@ test('isolates cached quote data from caller mutation', async () => {
   });
 
   const first = await gateway.getQuote('BTC/USDT');
+  assert.ok(first.ok);
+  assert.ok(!Array.isArray(first.data));
   first.data.price = 999;
   const second = await gateway.getQuote('BTC/USDT');
 
+  assert.ok(second.ok);
+  assert.ok(!Array.isArray(second.data));
   assert.equal(second.data.price, 100);
   assert.equal(second.meta.cached, true);
 });
@@ -675,11 +694,13 @@ test('normalizes invalid cache TTL values to the finite default', async () => {
 
 test('cancels an in-flight market provider request immediately when the client aborts', async () => {
   const controller = new AbortController();
-  let receivedSignal;
+  let receivedSignal: AbortSignal | undefined;
   const gateway = createMarketGateway({
     fetchImpl: async (_url, options) => {
-      receivedSignal = options.signal;
-      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+      const requestSignal = options?.signal;
+      if (!requestSignal) throw new Error('request signal is required');
+      receivedSignal = requestSignal;
+      return new Promise<FetchResponseLike>((_, reject) => requestSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
     }
   });
   const pending = gateway.getQuote('AAPL', { signal: controller.signal });
@@ -688,8 +709,9 @@ test('cancels an in-flight market provider request immediately when the client a
   controller.abort();
 
   const result = await pending;
-  assert.equal(result.ok, false);
+  assert.ok(!result.ok);
   assert.equal(result.error.code, 'request_aborted');
+  assert.ok(receivedSignal);
   assert.equal(receivedSignal.aborted, true);
 });
 
@@ -697,13 +719,13 @@ test('keeps a shared market fetch alive when an earlier caller aborts', async ()
   const firstController = new AbortController();
   const secondController = new AbortController();
   let fetchCalls = 0;
-  let completeFetch;
-  let providerSignal;
+  let completeFetch: ((response: FetchResponseLike) => void) | undefined;
+  let providerSignal: AbortSignal | undefined;
   const gateway = createMarketGateway({
     fetchImpl: async (_url, options) => {
       fetchCalls += 1;
-      providerSignal = options.signal;
-      return new Promise((resolve) => { completeFetch = resolve; });
+      providerSignal = options?.signal ?? undefined;
+      return new Promise<FetchResponseLike>((resolve) => { completeFetch = resolve; });
     }
   });
 
@@ -711,9 +733,13 @@ test('keeps a shared market fetch alive when an earlier caller aborts', async ()
   const second = gateway.getQuote('AAPL', { signal: secondController.signal });
   firstController.abort();
 
-  assert.equal((await first).error.code, 'request_aborted');
+  const firstResult = await first;
+  assert.ok(!firstResult.ok);
+  assert.equal(firstResult.error.code, 'request_aborted');
   assert.equal(fetchCalls, 1);
+  assert.ok(providerSignal);
   assert.equal(providerSignal.aborted, false);
+  assert.ok(completeFetch);
   completeFetch(jsonResponse({
     chart: { result: [{
       meta: { regularMarketPrice: 210, previousClose: 200, currency: 'USD' },
@@ -729,12 +755,12 @@ test('keeps a shared market fetch alive when an earlier caller aborts', async ()
 test('starts a fresh market fetch when a new caller follows the last consumer abort', async () => {
   const firstController = new AbortController();
   let fetchCalls = 0;
-  let firstProviderSignal;
+  let firstProviderSignal: AbortSignal | undefined;
   const gateway = createMarketGateway({
     fetchImpl: async (_url, options) => {
       fetchCalls += 1;
       if (fetchCalls === 1) {
-        firstProviderSignal = options.signal;
+        firstProviderSignal = options?.signal ?? undefined;
         return new Promise(() => {});
       }
       return jsonResponse({
@@ -751,8 +777,11 @@ test('starts a fresh market fetch when a new caller follows the last consumer ab
   firstController.abort();
   const second = gateway.getQuote('AAPL');
 
+  assert.ok(firstProviderSignal);
   assert.equal(firstProviderSignal.aborted, true);
   assert.equal(fetchCalls, 2);
-  assert.equal((await first).error.code, 'request_aborted');
+  const firstResult = await first;
+  assert.ok(!firstResult.ok);
+  assert.equal(firstResult.error.code, 'request_aborted');
   assert.equal((await second).ok, true);
 });

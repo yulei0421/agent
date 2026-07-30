@@ -1,6 +1,8 @@
-import { createDeepSeekSseParser, formatSse } from './sse.js';
-import type { DeepSeekSseEvent } from './sse.js';
-import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult, ToolRegistry } from './types.js';
+// Legacy-only reference implementation kept for historical protocol tests.
+// Production chat traffic is handled by api/chat -> application/chat -> agent.
+import { createDeepSeekSseParser, formatSse } from '../sse.js';
+import type { DeepSeekSseEvent } from '../sse.js';
+import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult, ToolRegistry } from '../types.js';
 
 const KEY_PLACEHOLDER = '在这里填写你的apikey';
 const MAX_TOOL_ROUNDS = 3;

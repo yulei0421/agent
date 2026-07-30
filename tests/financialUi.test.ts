@@ -3,11 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { streamChat } from '../src/lib/chat.js';
 
-async function readSource(path) {
+async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
-function streamResponse(events) {
+function streamResponse(events: string): Response {
   const body = new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(events));
@@ -39,7 +39,7 @@ test('ChatWindow explains financial context and suggests explicit market symbols
 
 test('streamChat forwards tool and tool_result events without disrupting text events', async () => {
   const originalFetch = globalThis.fetch;
-  const received = [];
+  const received: unknown[] = [];
   globalThis.fetch = async () => streamResponse([
     'data: {"type":"tool","id":"call_quote","name":"get_quote"}\\n\\n',
     'data: {"type":"tool_result","id":"call_quote","name":"get_quote","ok":true,"result":{"data":{"price":210,"currency":"USD"},"meta":{"symbol":"AAPL","source":"yahoo-finance","asOf":"2026-07-15T00:00:00.000Z","delay":"15m"}}}\\n\\n',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createDeepSeekSseParser, formatSse, parseDeepSeekSse } from '../server/sse.js';
+import { createDeepSeekSseParser, formatSse, parseDeepSeekSse, type DeepSeekSseEvent } from '../server/sse.js';
 
 test('parses DeepSeek SSE delta chunks and done marker', () => {
   const chunks = [
@@ -68,7 +68,7 @@ test('parses tool call deltas split across DeepSeek SSE chunks', () => {
 });
 
 test('buffers tool call SSE events when a CRLF delimiter is fragmented', () => {
-  const events = [];
+  const events: DeepSeekSseEvent[] = [];
   const parser = createDeepSeekSseParser((event) => events.push(event));
 
   parser.push(

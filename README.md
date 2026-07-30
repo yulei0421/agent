@@ -1,6 +1,6 @@
 # DeepSeek 金融 AI Agent Demo
 
-一个用于学习和验证 AI Agent 工程模式的金融研究 Demo。项目以 React 金融工作台为界面，通过 Express 服务调用 DeepSeek 兼容 API，并把天气、新闻、资产搜索和市场报价统一为模型可选择的受控工具。
+一个用于学习和验证 AI Agent 工程模式的金融研究 Demo。项目以 React 金融工作台为界面，通过 NestJS 服务调用 DeepSeek 兼容 API，并把天气、新闻、资产搜索和市场报价统一为模型可选择的受控工具。
 
 它关注的是流式对话、工具调用、外部数据边界和本地会话体验，而不是交易执行系统。所有市场信息均应在工具查询后才进入对话或研究结果。
 
@@ -11,7 +11,7 @@
 | 前端 | React 19 + Vite 7 | 对话、金融工作台、资产选择和工具结果展示。 |
 | 本地数据 | IndexedDB | 保存本地用户、会话、消息和离线待重试队列。 |
 | 实时通信 | SSE + WebSocket | 流式回答与工具事件；连接状态、心跳和重连。 |
-| 服务端 | Node.js + Express 5 | 代理 DeepSeek 请求、校验上下文、执行受控工具并提供资产搜索。 |
+| 服务端 | Node.js + NestJS 11 | 分层 API、SSE、WebSocket、模型适配、受控工具与资产搜索。 |
 | Agent 工具 | 统一工具注册表 | 只允许天气、新闻、资产搜索和行情查询四类调用。 |
 | 市场数据 | 东方财富、腾讯、Yahoo Finance、Binance | 分市场获取报价，并附带来源、时间和延迟元数据。 |
 
@@ -69,26 +69,29 @@
 └───────────────┬───────────────────────────┬──────────────────────────────┘
                 │ /api/chat/stream (SSE)    │ /api/market/search, /ws
                 v                           v
-┌──────────────────────────── Express / Node 服务 ─────────────────────────┐
-│ 路由、CORS、聊天上下文校验、SSE 转发、WebSocket 心跳                       │
+┌──────────────────────────── NestJS 服务端 ──────────────────────────────┐
+│ API：HTTP、SSE、WebSocket、CORS 与连接取消                               │
+│   -> Application：Chat / Market 用例                                     │
+│   -> Domain：消息、工具端口、错误合同                                     │
+│   -> Infrastructure：DeepSeek、工具注册表、市场供应商                    │
 │                                                                            │
-│  DeepSeek 请求代理 ──> 工具注册表 ──> 天气 / 新闻 / 资产搜索 / 行情网关   │
-│                                   │                  │                   │
-│                                   │                  └─ 市场数据供应商   │
-│                                   └─ 字段清洗、调用上限与错误归一化       │
+│  LangGraph 在线 Agent ──> 工具注册表 ──> 天气 / 新闻 / 资产搜索 / 行情网关│
+│                                      │                  │                │
+│                                      │                  └─ 市场数据供应商│
+│                                      └─ 字段清洗、调用上限与错误归一化    │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 v
                      DeepSeek 兼容 Chat Completions API
 ```
 
-`server/agent/` 中还提供了基于 LangGraph 的独立规划模块：它接收目标，规范化最多三个计划步骤，并返回初始状态。该模块已有测试覆盖，但当前没有接入 `/api/chat/stream` 的在线请求链路。
+`server/agent/` 使用 LangGraph 运行在线 Agent：模型根据受控工具清单决定是否调用工具，服务端校验并执行后把结果回传模型，直到输出最终回答或达到安全上限。
 
 ## 请求与数据流
 
 ### 流式聊天
 
 ```text
-React -> POST /api/chat/stream -> Express -> DeepSeek
+React -> POST /api/chat/stream -> Nest API -> ChatApplicationService -> LangGraph -> DeepSeek
       <- SSE delta / reasoning / tool / tool_result / error / done
 ```
 
@@ -109,7 +112,7 @@ React 搜索框 -> GET /api/market/search?q=<query> -> 资产搜索服务 -> JSO
 ### 连接状态
 
 ```text
-React <-> WebSocket /ws <-> Express
+React <-> WebSocket /ws <-> Nest HTTP server
 ```
 
 连接建立后服务端发送 `status: connected`。客户端每 5 秒发送 `ping`，服务端回复 `pong`，并每 15 秒广播一次 `notice` 心跳；连接关闭后客户端会在约 1.2 秒后尝试重连。
@@ -237,12 +240,16 @@ SSE 的 `data:` 负载使用 JSON，常见事件包括：
 │   ├── components/                # 登录、侧栏、对话、消息与金融工作台
 │   └── lib/                       # SSE、WebSocket、IndexedDB、历史与资产搜索客户端
 ├── server/
-│   ├── index.ts                   # Express 路由、CORS 和 WebSocket 装配
-│   ├── deepseek.ts                # DeepSeek 流式代理、工具调用循环和上下文校验
+│   ├── main.ts                    # 唯一运行时入口、Nest 应用与 WebSocket 装配
+│   ├── api/                       # Nest 控制器：健康检查、聊天 SSE、市场搜索
+│   ├── application/               # 聊天和市场查询用例、端口定义
+│   ├── domain/                    # 消息、工具、错误合同
+│   ├── infrastructure/            # 配置、DeepSeek 客户端与工具适配器
+│   ├── legacy/                    # 仅供历史协议回归的旧 Express 实现，不参与生产运行
 │   ├── sse.ts                     # DeepSeek SSE 解析与事件格式化
-│   ├── tools/                     # 工具注册表、天气、新闻和行情工具适配
-│   ├── market/                    # 代码规范化、搜索、供应商解析和行情网关
-│   └── agent/                     # 独立的 LangGraph 规划状态与规划图
+│   ├── tools/                     # 受基础设施适配器调用的工具实现
+│   ├── market/                    # 受基础设施适配器调用的市场实现
+│   └── agent/                     # LangGraph 状态机与工具调用循环
 ├── tests/                         # Node 内置测试运行器的覆盖用例
 ├── .env.example                   # 可提交的环境变量模板
 └── package.json                   # 脚本与依赖

@@ -1,9 +1,13 @@
-export function trimHistory(messages, maxChars = 6000) {
+export type HistoryMessage = { role: string; content?: string; status?: string; [key: string]: unknown };
+export type ModelHistoryMessage = { role: string; content?: string };
+
+export function trimHistory(messages: readonly ModelHistoryMessage[], maxChars = 6000): ModelHistoryMessage[] {
   let total = 0;
-  const selected = [];
+  const selected: ModelHistoryMessage[] = [];
 
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
+    if (!message) continue;
     const size = String(message.content ?? '').length;
     if (total + size > maxChars) break;
     selected.unshift({ role: message.role, content: message.content });
@@ -13,7 +17,7 @@ export function trimHistory(messages, maxChars = 6000) {
   return selected;
 }
 
-export function normalizeInterruptedMessages(messages) {
+export function normalizeInterruptedMessages<T extends HistoryMessage>(messages: readonly T[]): T[] {
   return messages.map((message) => {
     if (message.role === 'assistant' && message.status === 'streaming') {
       return {
@@ -26,7 +30,7 @@ export function normalizeInterruptedMessages(messages) {
   });
 }
 
-export function buildModelMessages(messages, maxChars = 6000) {
+export function buildModelMessages(messages: readonly HistoryMessage[], maxChars = 6000): ModelHistoryMessage[] {
   const clean = messages
     .filter((message) => {
       if (!message.content?.trim()) return false;

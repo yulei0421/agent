@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
-    "server": "tsx server/index.ts",
+    "dev": "concurrently \"tsx watch server/bootstrap.ts\" \"vite --host 127.0.0.1\"",
+    "server": "tsx server/bootstrap.ts",
     "client": "vite --host 127.0.0.1",
     "build": "vite build",
     "test": "tsx --test tests/*.test.ts",

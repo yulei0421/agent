@@ -8,8 +8,9 @@ import {
   isWeatherRequest,
   resolveLiveContext
 } from '../server/tools/live.js';
+import type { FetchResponseLike } from '../server/market/types.js';
 
-function jsonResponse(body, status = 200) {
+function jsonResponse(body: unknown, status = 200): FetchResponseLike {
   return {
     ok: status === 200,
     status,
@@ -44,7 +45,7 @@ test('builds geo and weather URLs from fixed providers only', () => {
 });
 
 test('resolves an IP location and normalizes a live weather snapshot from fixed providers', async () => {
-  const requestedOrigins = [];
+  const requestedOrigins: string[] = [];
   const result = await resolveLiveContext({
     ip: '203.0.113.10',
     content: '今天天气怎么样？',
@@ -96,7 +97,7 @@ test('resolves an IP location and normalizes a live weather snapshot from fixed 
 });
 
 test('uses geocoding for a requested city outside the built-in location list', async () => {
-  const requestedUrls = [];
+  const requestedUrls: URL[] = [];
   const result = await resolveLiveContext({
     ip: '203.0.113.10',
     content: '北京今天天气怎么样？',
@@ -126,16 +127,20 @@ test('uses geocoding for a requested city outside the built-in location list', a
     'https://geocoding-api.open-meteo.com',
     'https://api.open-meteo.com'
   ]);
-  assert.equal(requestedUrls[0].searchParams.get('name'), '北京');
-  assert.equal(requestedUrls[1].searchParams.get('latitude'), '39.9042');
-  assert.equal(requestedUrls[1].searchParams.get('longitude'), '116.4074');
-  assert.equal(requestedUrls[1].searchParams.get('timezone'), 'Asia/Shanghai');
+  const [geocodingUrl, weatherUrl] = requestedUrls;
+  assert.ok(geocodingUrl);
+  assert.ok(weatherUrl);
+  assert.equal(geocodingUrl.searchParams.get('name'), '北京');
+  assert.equal(weatherUrl.searchParams.get('latitude'), '39.9042');
+  assert.equal(weatherUrl.searchParams.get('longitude'), '116.4074');
+  assert.equal(weatherUrl.searchParams.get('timezone'), 'Asia/Shanghai');
   assert.equal(result.location, '北京');
+  assert.ok('weather' in result);
   assert.equal(result.weather.city, '北京');
 });
 
 test('uses Shanghai coordinates when geocoding or client IP is unavailable', async () => {
-  const requestedUrls = [];
+  const requestedUrls: URL[] = [];
   const result = await resolveLiveContext({
     ip: '',
     content: '上海今天天气怎么样？',
@@ -157,9 +162,12 @@ test('uses Shanghai coordinates when geocoding or client IP is unavailable', asy
   });
 
   assert.deepEqual(requestedUrls.map((url) => url.origin), ['https://api.open-meteo.com']);
-  assert.equal(requestedUrls[0].searchParams.get('latitude'), '31.22222');
-  assert.equal(requestedUrls[0].searchParams.get('longitude'), '121.45806');
+  const [weatherUrl] = requestedUrls;
+  assert.ok(weatherUrl);
+  assert.equal(weatherUrl.searchParams.get('latitude'), '31.22222');
+  assert.equal(weatherUrl.searchParams.get('longitude'), '121.45806');
   assert.equal(result.location, '上海');
+  assert.ok('weather' in result);
   assert.equal(result.weather.temperatureC, 33.8);
 });
 
@@ -191,7 +199,10 @@ test('rejects unsafe client IPs and reports upstream failures without returning 
   const invalidIp = await resolveLiveContext({
     ip: '127.0.0.1,evil',
     content: '今天天气',
-    fetchImpl: async () => { calls += 1; }
+    fetchImpl: async () => {
+      calls += 1;
+      return jsonResponse({});
+    }
   });
 
   assert.deepEqual(invalidIp, { ok: false, errorCode: 'invalid_client_ip' });
@@ -208,15 +219,17 @@ test('rejects unsafe client IPs and reports upstream failures without returning 
 test('cancels a live location fetch immediately and skips the weather followup', async () => {
   const controller = new AbortController();
   let fetchCalls = 0;
-  let receivedSignal;
+  let receivedSignal: AbortSignal | undefined;
   const pending = resolveLiveContext({
     ip: '203.0.113.10',
     content: '北京天气',
     signal: controller.signal,
     fetchImpl: async (_url, options) => {
       fetchCalls += 1;
-      receivedSignal = options.signal;
-      return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+      const requestSignal = options?.signal;
+      if (!requestSignal) throw new Error('request signal is required');
+      receivedSignal = requestSignal;
+      return new Promise<FetchResponseLike>((_, reject) => requestSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
     }
   });
 
@@ -224,6 +237,7 @@ test('cancels a live location fetch immediately and skips the weather followup',
   controller.abort();
 
   assert.deepEqual(await pending, { ok: false, errorCode: 'request_aborted' });
+  assert.ok(receivedSignal);
   assert.equal(receivedSignal.aborted, true);
   assert.equal(fetchCalls, 1);
 });

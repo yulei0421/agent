@@ -18,7 +18,7 @@ test('publishes the four model tools with closed object schemas in a stable orde
     assert.equal(tool.function.parameters.type, 'object');
     assert.equal(tool.function.parameters.additionalProperties, false);
   }
-  assert.deepEqual(definitions[0].function.parameters, {
+  assert.deepEqual(definitions[0]?.function.parameters, {
     type: 'object',
     properties: { city: { type: 'string', maxLength: 64 } },
     additionalProperties: false
@@ -51,7 +51,7 @@ test('short-circuits pre-aborted execution without invoking a tool adapter', asy
 
 test('forwards the client abort signal to every registry adapter', async () => {
   const controller = new AbortController();
-  const signals = [];
+  const signals: (AbortSignal | undefined)[] = [];
   const registry = createToolRegistry({
     liveContext: async (input) => { signals.push(input.signal); return { ok: true }; },
     webSearch: async (_query, options) => { signals.push(options.signal); return { ok: true }; },
@@ -68,7 +68,7 @@ test('forwards the client abort signal to every registry adapter', async () => {
 });
 
 test('uses one field contract for published schemas and execution validation', async () => {
-  const calls = [];
+  const calls: string[] = [];
   const registry = createToolRegistry({
     liveContext: async () => { calls.push('get_weather'); return { ok: true }; },
     webSearch: async () => { calls.push('search_news'); return { ok: true }; },
@@ -76,13 +76,13 @@ test('uses one field contract for published schemas and execution validation', a
     marketGateway: { getQuote: async () => { calls.push('get_quote'); return { ok: true, data: {}, meta: {} }; } }
   });
 
-  const callsByTool = {
+  const callsByTool: Record<string, Record<string, string>> = {
     get_weather: {},
     search_news: { query: '新闻' },
     search_asset: { query: '资产' },
     get_quote: { symbol: 'AAPL' }
   };
-  const fieldsByTool = {
+  const fieldsByTool: Record<string, string[]> = {
     get_weather: ['city'],
     search_news: ['query'],
     search_asset: ['query'],
@@ -98,7 +98,7 @@ test('uses one field contract for published schemas and execution validation', a
 });
 
 test('executes weather with contextual IP and clock while returning safe weather data', async () => {
-  const calls = [];
+  const calls: unknown[] = [];
   const registryNow = () => new Date('2026-07-20T00:00:00.000Z');
   const contextNow = () => new Date('2026-07-20T01:00:00.000Z');
   const weather = { city: '上海', temperatureC: 31.2, source: 'open-meteo' };
@@ -231,7 +231,7 @@ test('caps and sanitizes asset search results', async () => {
 
 test('executes search_news with its adapter clock and returns sanitized news data', async () => {
   const now = () => new Date('2026-07-20T02:00:00.000Z');
-  const calls = [];
+  const calls: { query: string; options: { now: Date; signal?: AbortSignal } }[] = [];
   const registry = createToolRegistry({
     now,
     webSearch: async (query, options) => {
@@ -266,8 +266,10 @@ test('executes search_news with its adapter clock and returns sanitized news dat
   const result = await registry.execute({ name: 'search_news', arguments: '{"query":"上海市场"}' });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].query, '上海市场');
-  assert.equal(calls[0].options.now.toISOString(), '2026-07-20T02:00:00.000Z');
+  const [firstCall] = calls;
+  assert.ok(firstCall);
+  assert.equal(firstCall.query, '上海市场');
+  assert.equal(firstCall.options.now.toISOString(), '2026-07-20T02:00:00.000Z');
   assert.deepEqual(result, {
     ok: true,
     name: 'search_news',

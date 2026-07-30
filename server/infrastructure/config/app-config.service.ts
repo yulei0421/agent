@@ -58,7 +58,7 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
 export class AppConfigService {
   readonly value: AppConfig;
 
-  constructor() {
-    this.value = parseAppConfig(process.env);
+  constructor(config: AppConfig = parseAppConfig(process.env)) {
+    this.value = config;
   }
 }

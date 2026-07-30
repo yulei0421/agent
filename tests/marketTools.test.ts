@@ -22,7 +22,7 @@ test('does not mistake the A in A股 for a US ticker in the legacy symbol extrac
 });
 
 test('resolves Chinese market names and the Shanghai Composite alias from a chat query', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('贵州茅台和上证指数最新行情', async (name) => {
     requestedNames.push(name);
     return name === '贵州茅台'
@@ -60,7 +60,7 @@ test('market name resolution removes question phrasing before requesting the Chi
   ];
 
   for (const query of queries) {
-    const requestedNames = [];
+    const requestedNames: string[] = [];
     const symbols = await resolveMarketSymbols(query, async (name) => {
       requestedNames.push(name);
       return { symbol: '600519.SH', name: '贵州茅台', market: 'cn' };
@@ -71,7 +71,7 @@ test('market name resolution removes question phrasing before requesting the Chi
 });
 
 test('market name resolution preserves the A-share name 和而泰 instead of splitting its first character', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('和而泰最新行情', async (name) => {
     requestedNames.push(name);
     return { symbol: '002402.SZ', name: '和而泰', market: 'cn' };
@@ -82,7 +82,7 @@ test('market name resolution preserves the A-share name 和而泰 instead of spl
 });
 
 test('market name resolution retries a compound 和而泰 candidate as two controlled names after an exact miss', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('请对比隆基绿能和而泰今日走势', async (name) => {
     requestedNames.push(name);
     return {
@@ -99,7 +99,7 @@ test('market name resolution retries a compound 和而泰 candidate as two contr
 });
 
 test('market name resolution separates multiple Chinese names joined by 和', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('比较贵州茅台和宁德时代最新行情', async (name) => {
     requestedNames.push(name);
     return {
@@ -116,7 +116,7 @@ test('market name resolution separates multiple Chinese names joined by 和', as
 });
 
 test('market name resolution supports Chinese A-share prefixes and bare six-digit code lookups', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('A股贵州茅台和600519最新行情', async (name) => {
     requestedNames.push(name);
     return name === '贵州茅台'
@@ -129,7 +129,7 @@ test('market name resolution supports Chinese A-share prefixes and bare six-digi
 });
 
 test('market name resolution makes no more than three de-duplicated candidate requests after failures', async () => {
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('甲一、乙二、丙三、丁四、甲一、戊五', async (name) => {
     requestedNames.push(name);
     return null;
@@ -140,14 +140,14 @@ test('market name resolution makes no more than three de-duplicated candidate re
 });
 
 test('market name resolution removes action prefixes and prioritizes the first three valid Chinese names', async () => {
-  const prefixRequests = [];
+  const prefixRequests: string[] = [];
   await resolveMarketSymbols('我想查询贵州茅台今天行情', async (name) => {
     prefixRequests.push(name);
     return { symbol: '600519.SH', name: '贵州茅台', market: 'cn' };
   });
   assert.deepEqual(prefixRequests, ['贵州茅台']);
 
-  const requestedNames = [];
+  const requestedNames: string[] = [];
   const symbols = await resolveMarketSymbols('关注贵州茅台、宁德时代、比亚迪和招商银行行情', async (name) => {
     requestedNames.push(name);
     return {
@@ -167,9 +167,9 @@ test('market name resolution removes action prefixes and prioritizes the first t
 });
 
 test('builds safe market context with snapshot provenance for successful quotes', async () => {
-  const calls = [];
+  const calls: string[] = [];
   const gateway = {
-    async getQuote(symbol) {
+    async getQuote(symbol: string) {
       calls.push(symbol);
       return {
         ok: true,
@@ -183,13 +183,17 @@ test('builds safe market context with snapshot provenance for successful quotes'
 
   assert.deepEqual(calls, ['AAPL.US', 'BTC/USDT']);
   assert.equal(result.messages.length, 2);
-  assert.match(result.messages[0].content, /symbol=AAPL\.US/);
-  assert.match(result.messages[0].content, /price=123\.45/);
-  assert.match(result.messages[0].content, /changePercent=-1\.5/);
-  assert.match(result.messages[0].content, /source=yahoo-finance/);
-  assert.match(result.messages[0].content, /asOf=2026-07-15T00:00:00\.000Z/);
-  assert.match(result.messages[0].content, /delay=unknown/);
-  assert.deepEqual(result.toolEvents[0], {
+  const [firstMessage] = result.messages;
+  const [firstEvent] = result.toolEvents;
+  assert.ok(firstMessage);
+  assert.ok(firstEvent);
+  assert.match(firstMessage.content, /symbol=AAPL\.US/);
+  assert.match(firstMessage.content, /price=123\.45/);
+  assert.match(firstMessage.content, /changePercent=-1\.5/);
+  assert.match(firstMessage.content, /source=yahoo-finance/);
+  assert.match(firstMessage.content, /asOf=2026-07-15T00:00:00\.000Z/);
+  assert.match(firstMessage.content, /delay=unknown/);
+  assert.deepEqual(firstEvent, {
     name: 'get_quote',
     assetName: 'AAPL.US',
     symbol: 'AAPL.US',
@@ -215,11 +219,15 @@ test('reports unavailable quotes without inventing a price', async () => {
     }
   });
 
-  assert.match(result.messages[0].content, /不可用/);
-  assert.match(result.messages[0].content, /provider_rate_limited/);
-  assert.doesNotMatch(result.messages[0].content, /price=/);
-  assert.doesNotMatch(result.messages[0].content, /sensitive upstream detail/);
-  assert.deepEqual(result.toolEvents[0], {
+  const [firstMessage] = result.messages;
+  const [firstEvent] = result.toolEvents;
+  assert.ok(firstMessage);
+  assert.ok(firstEvent);
+  assert.match(firstMessage.content, /不可用/);
+  assert.match(firstMessage.content, /provider_rate_limited/);
+  assert.doesNotMatch(firstMessage.content, /price=/);
+  assert.doesNotMatch(firstMessage.content, /sensitive upstream detail/);
+  assert.deepEqual(firstEvent, {
     name: 'get_quote',
     assetName: 'AAPL.US',
     symbol: 'AAPL.US',
