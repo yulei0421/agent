@@ -34,3 +34,17 @@ test('application services do not depend on HTTP or Nest framework types', async
     assert.doesNotMatch(implementation, /from ['"]express['"]/);
   }
 });
+
+test('chat application depends on the agent runner port rather than the LangGraph implementation', async () => {
+  const [chatService, ports, runner] = await Promise.all([
+    source('server/application/chat/chat.service.ts'),
+    source('server/application/chat/chat.ports.ts'),
+    source('server/agent/langgraph-agent-runner.ts')
+  ]);
+
+  assert.match(ports, /AGENT_RUNNER/);
+  assert.match(ports, /interface AgentRunner/);
+  assert.match(chatService, /AgentRunner/);
+  assert.doesNotMatch(chatService, /agent\/graph/);
+  assert.match(runner, /createOnlineAgentGraph/);
+});

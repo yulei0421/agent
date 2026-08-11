@@ -1,5 +1,5 @@
 import { END, START, StateGraph } from '@langchain/langgraph';
-import type { ModelClient, Planner, ToolExecutor } from '../application/chat/chat.ports.js';
+import type { ModelClient, ModelConversationMessage, Planner, ToolExecutor } from '../application/chat/chat.ports.js';
 import type { ToolExecutionResult } from '../domain/tools/tool.types.js';
 import { AppError } from '../domain/errors/app-error.js';
 import type { DeepSeekSseEvent } from '../sse.js';
@@ -9,7 +9,6 @@ import {
   normalizePlan,
   type AssistantToolCall,
   type AgentGraphState,
-  type ModelConversationMessage,
   type PendingToolCall
 } from './state.js';
 

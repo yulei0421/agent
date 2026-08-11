@@ -5,8 +5,10 @@ import { ChatController } from '../server/api/chat/chat.controller.js';
 import type { ChatApplicationService } from '../server/application/chat/chat.service.js';
 import { ChatApplicationService as RealChatApplicationService } from '../server/application/chat/chat.service.js';
 import type { AppLoggerService } from '../server/infrastructure/logging/app-logger.service.js';
+import type { RuntimeTelemetry } from '../server/infrastructure/runtime/runtime-telemetry.js';
 
 const logger = { info() {}, error() {} } as unknown as AppLoggerService;
+const telemetry = { recordSseDisconnect() {} } as unknown as RuntimeTelemetry;
 
 class FakeResponse extends EventEmitter {
   readonly headers = new Map<string, string>();
@@ -53,7 +55,7 @@ test('chat controller streams application events with the established SSE contra
       return [];
     }
   } as unknown as ChatApplicationService;
-  const controller = new ChatController(service, logger);
+  const controller = new ChatController(service, logger, telemetry);
   const response = new FakeResponse();
 
   await controller.stream(
@@ -74,6 +76,21 @@ test('chat controller streams application events with the established SSE contra
   assert.equal(received[0]?.ip, '203.0.113.7');
 });
 
+test('chat controller completes a normal stream that returns without a done event', async () => {
+  const service = {
+    async run() {
+      return [];
+    }
+  } as unknown as ChatApplicationService;
+  const controller = new ChatController(service, logger, telemetry);
+  const response = new FakeResponse();
+
+  await controller.stream(new FakeRequest({}) as never, response as never);
+
+  assert.deepEqual(response.writes, ['data: {"type":"done"}\n\n']);
+  assert.equal(response.writableEnded, true);
+});
+
 test('chat controller aborts the application request when the client disconnects', async () => {
   let receivedSignal: AbortSignal | undefined;
   const service = {
@@ -82,7 +99,7 @@ test('chat controller aborts the application request when the client disconnects
       return [];
     }
   } as unknown as ChatApplicationService;
-  const controller = new ChatController(service, logger);
+  const controller = new ChatController(service, logger, telemetry);
   const response = new FakeResponse();
   const streaming = controller.stream(new FakeRequest({}) as never, response as never);
 
@@ -110,10 +127,18 @@ test('chat controller writes a model delta before the model stream completes', a
     }
   };
   const service = new RealChatApplicationService({
-    model,
-    tools: { definitions: () => [], execute: async () => ({ ok: false as const, name: 'unused', errorCode: 'tool_unavailable' }) }
+    runner: {
+      async run(request) {
+        const signal = request.signal ?? new AbortController().signal;
+        void signal;
+        for await (const event of model.stream()) {
+          request.onEvent?.(event);
+        }
+        return [{ type: 'done' }];
+      }
+    }
   });
-  const controller = new ChatController(service, logger);
+  const controller = new ChatController(service, logger, telemetry);
   const response = new FakeResponse();
 
   const streaming = controller.stream(

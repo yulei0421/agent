@@ -1,19 +1,23 @@
 import { Module, type DynamicModule, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ChatController } from './api/chat/chat.controller.js';
 import { HealthController } from './api/health/health.controller.js';
+import { MetricsController } from './api/health/metrics.controller.js';
 import { MarketController } from './api/market/market.controller.js';
 import { StatusGateway } from './api/status/status.gateway.js';
 import { RequestIdMiddleware } from './api/request-id.middleware.js';
 import { ChatApplicationService } from './application/chat/chat.service.js';
-import { MODEL_CLIENT, PLANNER, TOOL_EXECUTOR, type ModelClient, type Planner } from './application/chat/chat.ports.js';
+import { AGENT_RUNNER, MODEL_CLIENT, PLANNER, TOOL_EXECUTOR, type AgentRunner, type ModelClient, type Planner } from './application/chat/chat.ports.js';
+import { LangGraphAgentRunner } from './agent/langgraph-agent-runner.js';
 import { MarketSearchService } from './application/market/market-search.service.js';
 import type { ToolExecutor } from './domain/tools/tool.types.js';
 import { AppConfigModule } from './infrastructure/config/app-config.module.js';
 import { AppConfigService, type AppConfig } from './infrastructure/config/app-config.service.js';
 import { DeepSeekClient } from './infrastructure/deepseek/deepseek-client.js';
 import { ModelPlanner } from './infrastructure/deepseek/model-planner.js';
+import { ResilientModelClient } from './infrastructure/deepseek/resilient-model-client.js';
 import { UnavailableModelClient } from './infrastructure/deepseek/unavailable-model-client.js';
 import { AppLoggerService } from './infrastructure/logging/app-logger.service.js';
+import { RuntimeTelemetry } from './infrastructure/runtime/runtime-telemetry.js';
 import { createToolRegistryExecutor } from './infrastructure/tools/tool-registry.adapter.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
@@ -32,10 +36,11 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: [AppConfigModule.forRoot(environment)],
-      controllers: [HealthController, MarketController, ChatController],
+      controllers: [HealthController, MetricsController, MarketController, ChatController],
       providers: [
         AppLoggerService,
         StatusGateway,
+        RuntimeTelemetry,
         { provide: ASSET_SEARCH, useFactory: () => createAssetSearch() },
         {
           provide: MarketSearchService,
@@ -44,10 +49,15 @@ export class AppModule implements NestModule {
         },
         {
           provide: MODEL_CLIENT,
-          inject: [AppConfigService],
-          useFactory: (config: AppConfigService): ModelClient => config.value.deepSeekApiKey
-            ? new DeepSeekClient({ apiKey: config.value.deepSeekApiKey, baseUrl: config.value.deepSeekBaseUrl, model: config.value.deepSeekModel })
-            : new UnavailableModelClient()
+          inject: [AppConfigService, RuntimeTelemetry],
+          useFactory: (config: AppConfigService, telemetry: RuntimeTelemetry): ModelClient => {
+            const configured = Boolean(config.value.deepSeekApiKey);
+            telemetry.setModelConfigured(configured);
+            const inner = configured
+              ? new DeepSeekClient({ apiKey: config.value.deepSeekApiKey!, baseUrl: config.value.deepSeekBaseUrl, model: config.value.deepSeekModel })
+              : new UnavailableModelClient();
+            return new ResilientModelClient(inner, telemetry, config.value.modelResilience);
+          }
         },
         {
           provide: PLANNER,
@@ -68,9 +78,14 @@ export class AppModule implements NestModule {
           })
         },
         {
-          provide: ChatApplicationService,
+          provide: AGENT_RUNNER,
           inject: [MODEL_CLIENT, TOOL_EXECUTOR, PLANNER],
-          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner) => new ChatApplicationService({ model, tools, planner })
+          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner): AgentRunner => new LangGraphAgentRunner({ model, tools, planner })
+        },
+        {
+          provide: ChatApplicationService,
+          inject: [AGENT_RUNNER],
+          useFactory: (runner: AgentRunner) => new ChatApplicationService({ runner })
         }
       ]
     };

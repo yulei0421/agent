@@ -20,8 +20,45 @@ test('normalizes valid server configuration', () => {
     trustProxy: true,
     deepSeekApiKey: 'test-key',
     deepSeekBaseUrl: 'https://api.deepseek.com',
-    deepSeekModel: 'deepseek-v4-flash'
+    deepSeekModel: 'deepseek-v4-flash',
+    modelResilience: {
+      totalTimeoutMs: 60000,
+      firstEventTimeoutMs: 15000,
+      idleTimeoutMs: 30000,
+      maxRetries: 1,
+      circuitFailureThreshold: 3,
+      circuitCooldownMs: 30000
+    }
   });
+});
+
+test('validates model resilience configuration boundaries', () => {
+  assert.deepEqual(parseAppConfig({
+    MODEL_TOTAL_TIMEOUT_MS: '100',
+    MODEL_FIRST_EVENT_TIMEOUT_MS: '120000',
+    MODEL_IDLE_TIMEOUT_MS: '100',
+    MODEL_MAX_RETRIES: '0',
+    MODEL_CIRCUIT_FAILURE_THRESHOLD: '20',
+    MODEL_CIRCUIT_COOLDOWN_MS: '120000'
+  }).modelResilience, {
+    totalTimeoutMs: 100,
+    firstEventTimeoutMs: 120000,
+    idleTimeoutMs: 100,
+    maxRetries: 0,
+    circuitFailureThreshold: 20,
+    circuitCooldownMs: 120000
+  });
+
+  for (const environment of [
+    { MODEL_TOTAL_TIMEOUT_MS: '99' },
+    { MODEL_FIRST_EVENT_TIMEOUT_MS: '120001' },
+    { MODEL_IDLE_TIMEOUT_MS: '1.5' },
+    { MODEL_MAX_RETRIES: '2' },
+    { MODEL_CIRCUIT_FAILURE_THRESHOLD: '0' },
+    { MODEL_CIRCUIT_COOLDOWN_MS: 'not-a-number' }
+  ]) {
+    assert.throws(() => parseAppConfig(environment));
+  }
 });
 
 test('builds the Nest application without opening a network listener', async () => {

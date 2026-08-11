@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
-import { PLANNER, type Planner } from '../server/application/chat/chat.ports.js';
+import { MODEL_CLIENT, PLANNER, type ModelClient, type Planner } from '../server/application/chat/chat.ports.js';
+import { ResilientModelClient } from '../server/infrastructure/deepseek/resilient-model-client.js';
+import { RuntimeTelemetry } from '../server/infrastructure/runtime/runtime-telemetry.js';
 import { createApp } from '../server/main.js';
 
 test('the Nest composition root provides a planner function', async () => {
@@ -12,8 +14,12 @@ test('the Nest composition root provides a planner function', async () => {
 
   try {
     const planner = app.get<Planner>(PLANNER);
+    const model = app.get<ModelClient>(MODEL_CLIENT);
+    const telemetry = app.get(RuntimeTelemetry);
 
     assert.equal(typeof planner, 'function');
+    assert.ok(model instanceof ResilientModelClient);
+    assert.deepEqual(telemetry.modelStatus(), { configured: false, circuit: 'closed' });
   } finally {
     await app.close();
   }
