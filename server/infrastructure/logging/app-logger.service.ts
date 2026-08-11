@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 export interface SafeLogFields {
   requestId?: string;
+  connectionId?: string;
   event: string;
   toolName?: string;
   errorCode?: string;

@@ -1,7 +1,17 @@
 import { useState } from 'react';
-import { MessageList } from './MessageList.tsx';
+import { MessageList } from './MessageList.js';
+import type { ChatRecord } from '../types.js';
 
-export function ChatWindow({ messages, streaming, financialMode, financialSymbol, onSend, onStop }) {
+interface ChatWindowProps {
+  messages: readonly ChatRecord[];
+  streaming: boolean;
+  financialMode: boolean;
+  financialSymbol?: string;
+  onSend(content: string, queuedId?: string): void | Promise<void>;
+  onStop(): void;
+}
+
+export function ChatWindow({ messages, streaming, financialMode, financialSymbol, onSend, onStop }: ChatWindowProps) {
   const [content, setContent] = useState('');
   const placeholder = financialMode
     ? '输入金融问题和显式代码，例如 600519.SH、0700.HK、AAPL、BTC/USDT'
@@ -13,7 +23,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
         <header className="financial-context">
           <p className="eyebrow">Market context</p>
           <h1>Copilot 对话</h1>
-          <p>当前资产：<strong>{financialSymbol}</strong>。输入明确的市场代码后，可在回答中查看本次查询的数据来源与工具调用记录。</p>
+          <p>当前资产：<strong>{financialSymbol ?? '未选择'}</strong>。输入明确的市场代码后，可在回答中查看本次查询的数据来源与工具调用记录。</p>
         </header>
       )}
       <MessageList messages={messages} streaming={streaming} />

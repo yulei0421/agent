@@ -19,7 +19,7 @@ test('FinancialWorkspace exposes three accessible workbench tabs', async () => {
 test('App owns the current financial tab and selected asset context', async () => {
   const source = await readSource('../src/App.tsx');
 
-  assert.match(source, /const \[financialTab, setFinancialTab\] = useState\('markets'\)/);
+  assert.match(source, /const \[financialTab, setFinancialTab\] = useState<FinancialTab>\('markets'\)/);
   assert.match(source, /const \[financialSymbol, setFinancialSymbol\] = useState\('AAPL'\)/);
   assert.match(source, /<FinancialWorkspace[\s\S]*activeTab=\{financialTab\}[\s\S]*symbol=\{financialSymbol\}/);
   assert.match(source, /<ChatWindow[\s\S]*financialSymbol=\{financialSymbol\}/);
@@ -53,7 +53,7 @@ test('ChatWindow presents the selected symbol as financial context', async () =>
 
   assert.match(source, /financialSymbol/);
   assert.match(source, /当前资产/);
-  assert.match(source, /\{financialSymbol\}/);
+  assert.match(source, /\{financialSymbol \?\? '未选择'\}/);
 });
 
 test('financial workbench styles stack navigation, canvas, and chat panels on mobile', async () => {
@@ -75,15 +75,15 @@ test('desktop financial asset results remain a compact anchored popover without 
 
   assert.match(source, /\.financial-workbench-bar\s+\.asset-search-results\s*\{[\s\S]*position:\s*absolute/);
   assert.match(source, /\.financial-workbench-bar\s+\.asset-search-results\s*\{[\s\S]*max-height:\s*min\(18rem,\s*calc\(100dvh\s*-\s*12rem\)\)/);
-  assert.match(source, /\.financial-workbench-bar\s+\.asset-search-results\s*\{[\s\S]*background:\s*#fafdff/);
+  assert.match(source, /\.financial-workbench-bar\s+\.asset-search-results\s*\{[\s\S]*background:\s*#fffdf6/);
 });
 
 test('active financial entry uses a unified surface instead of an inset selection rail', async () => {
   const source = await readSource('../src/styles.css');
-  const activeRule = source.match(/\.sidebar > button\.financial-entry\[aria-pressed="true"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? '';
+  const activeRule = source.match(/\.sidebar > button\.financial-entry\[aria-pressed="true"\]\s*\{([^}]*)\}/)?.[1] ?? '';
 
   assert.doesNotMatch(activeRule, /inset\s+3px\s+0/);
-  assert.match(activeRule, /background:\s*linear-gradient/);
+  assert.match(activeRule, /background:\s*var\(--accent-quiet\)/);
 });
 
 test('session rows present the title and delete action as one integrated control', async () => {
@@ -109,7 +109,7 @@ test('asset suggestions are shown only while the search control is engaged', asy
   assert.match(source, /onFocus=\{\(\) => setAssetSearchOpen\(true\)\}/);
   assert.match(source, /onBlur=\{\(\) => setAssetSearchOpen\(false\)\}/);
   assert.match(source, /assetSearchOpen && assetResults\.length > 0 && \(/);
-  assert.match(source, /function selectAsset\(result\) \{[\s\S]*setAssetSearchOpen\(false\)/);
+  assert.match(source, /function selectAsset\(result: AssetSearchResult\): void \{[\s\S]*setAssetSearchOpen\(false\)/);
 });
 
 test('desktop research navigation is a compact horizontal control bar', async () => {

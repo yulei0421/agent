@@ -1,5 +1,5 @@
-export type HistoryMessage = { role: string; content?: string; status?: string; [key: string]: unknown };
-export type ModelHistoryMessage = { role: string; content?: string };
+export type HistoryMessage = { role: 'user' | 'assistant' | 'system'; content?: string; status?: string };
+export type ModelHistoryMessage = { role: 'user' | 'assistant' | 'system'; content: string };
 
 export function trimHistory(messages: readonly ModelHistoryMessage[], maxChars = 6000): ModelHistoryMessage[] {
   let total = 0;
@@ -8,7 +8,7 @@ export function trimHistory(messages: readonly ModelHistoryMessage[], maxChars =
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message) continue;
-    const size = String(message.content ?? '').length;
+    const size = message.content.length;
     if (total + size > maxChars) break;
     selected.unshift({ role: message.role, content: message.content });
     total += size;
@@ -38,7 +38,7 @@ export function buildModelMessages(messages: readonly HistoryMessage[], maxChars
       if (message.role === 'user') return true;
       return message.role === 'assistant' && message.status === 'done';
     })
-    .map(({ role, content }) => ({ role, content }));
+    .map(({ role, content }) => ({ role, content: content ?? '' }));
 
   return trimHistory(clean, maxChars);
 }

@@ -1,14 +1,16 @@
 import { END, START, StateGraph } from '@langchain/langgraph';
-import type { ModelClient, ToolExecutor } from '../application/chat/chat.ports.js';
+import type { ModelClient, Planner, ToolExecutor } from '../application/chat/chat.ports.js';
 import type { ToolExecutionResult } from '../domain/tools/tool.types.js';
+import { AppError } from '../domain/errors/app-error.js';
 import type { DeepSeekSseEvent } from '../sse.js';
 import type { AgentSseEvent } from '../types.js';
 import {
   AgentStateAnnotation,
   normalizePlan,
   type AssistantToolCall,
-  type PendingToolCall,
-  type Planner
+  type AgentGraphState,
+  type ModelConversationMessage,
+  type PendingToolCall
 } from './state.js';
 
 const MAX_TOOL_ROUNDS = 3;
@@ -17,10 +19,18 @@ const INVALID_TOOL_CALL_INSTRUCTION = 'Authoritative system instruction: the pre
 // A single internal cancellation result keeps every raced operation type-safe.
 const ABORTED = Symbol('operation_aborted');
 
+function publicModelError(error: unknown): Extract<AgentSseEvent, { type: 'error' }> {
+  return { type: 'error', message: error instanceof AppError ? error.code : 'model_unavailable' };
+}
+
 export interface OnlineAgentDependencies {
   model: ModelClient;
   tools: ToolExecutor;
   planner?: Planner;
+}
+
+function publish(state: typeof AgentStateAnnotation.State, event: AgentSseEvent): void {
+  state.onEvent?.(event);
 }
 
 function isCompleteJson(value: string): boolean {
@@ -119,6 +129,28 @@ function addInvalidToolCallInstruction(messages: typeof AgentStateAnnotation.Sta
   });
 }
 
+function currentPlanInstruction(state: AgentGraphState): ModelConversationMessage | null {
+  const step = state.plan[state.currentStep];
+  return typeof step === 'string'
+    ? {
+      role: 'system',
+      content: `Authoritative server planning instruction: complete the current step: ${step}. Use only registered tools when current information is required; otherwise answer the user when the goal is complete.`
+    }
+    : null;
+}
+
+function messagesForModel(state: AgentGraphState): ModelConversationMessage[] {
+  const instruction = currentPlanInstruction(state);
+  if (!instruction) return [...state.messages];
+  const firstNonSystem = state.messages.findIndex((message) => message.role !== 'system');
+  const index = firstNonSystem === -1 ? state.messages.length : firstNonSystem;
+  return [...state.messages.slice(0, index), instruction, ...state.messages.slice(index)];
+}
+
+function nextStep(plan: readonly string[], currentStep: number): number {
+  return currentStep < plan.length ? currentStep + 1 : currentStep;
+}
+
 async function planWithCancellation(
   planner: Planner | undefined,
   goal: string,
@@ -201,16 +233,12 @@ function createPlanNode(planner: Planner | undefined) {
       const rawPlan = await planWithCancellation(planner, state.goal, state.signal);
       if (rawPlan === ABORTED || state.signal?.aborted) return { finalized: true, terminated: true };
       if (!Array.isArray(rawPlan) || rawPlan.some((step) => typeof step !== 'string')) {
-        throw new Error('Planning request failed');
+        return { plan: [], currentStep: 0, terminated: false };
       }
       return { plan: normalizePlan(rawPlan), currentStep: 0, terminated: false };
-    } catch (error) {
+    } catch {
       if (state.signal?.aborted) return { finalized: true, terminated: true };
-      return {
-        events: [{ type: 'error', message: error instanceof Error ? error.message : 'Planning request failed' }],
-        finalized: true,
-        terminated: false
-      };
+      return { plan: [], currentStep: 0, terminated: false };
     }
   };
 }
@@ -219,6 +247,7 @@ function finalizeNode(state: typeof AgentStateAnnotation.State) {
   const events: AgentSseEvent[] = state.signal?.aborted || state.events.some((event) => event.type === 'done')
     ? []
     : [{ type: 'done' }];
+  for (const event of events) publish(state, event);
   return { finalized: true, terminated: Boolean(state.signal?.aborted), events };
 }
 
@@ -237,7 +266,7 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
     try {
       const signal = state.signal ?? new AbortController().signal;
       const stream = dependencies.model.stream({
-        messages: state.messages,
+        messages: messagesForModel(state),
         tools: state.forceFinalAnswer ? [] : dependencies.tools.definitions(),
         forceFinalAnswer: state.forceFinalAnswer
       }, signal);
@@ -253,16 +282,17 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
           done = true;
         } else if (event.type === 'delta' || event.type === 'reasoning') {
           events.push(event);
+          publish(state, event);
         } else if (event.type === 'tool_call_delta') {
           mergeToolCall(calls, event, order);
         } else if (event.type === 'error') {
-          modelError = event;
+          modelError = publicModelError(undefined);
           break;
         }
         order += 1;
       }
     } catch (error) {
-      modelError = { type: 'error', message: error instanceof Error ? error.message : 'Model request failed' };
+      modelError = publicModelError(error);
     } finally {
       if (iterator) {
         if (state.signal?.aborted) closeIteratorAfterAbort(iterator);
@@ -271,6 +301,7 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
     }
     if (cleanupAborted || state.signal?.aborted) return { finalized: true, terminated: true };
     if (modelError) {
+      publish(state, modelError);
       return { events: [modelError], finalized: true, pendingCalls: [], resumeModelAfterTools: false };
     }
     return {
@@ -284,6 +315,10 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
   const executeToolsNode = async (state: typeof AgentStateAnnotation.State) => {
     if (state.signal?.aborted) return { finalized: true, terminated: true };
     const events: AgentSseEvent[] = [];
+    const addEvent = (event: AgentSseEvent) => {
+      events.push(event);
+      publish(state, event);
+    };
     const messages = [...state.messages];
     const assistantCalls = state.pendingCalls.map(assistantToolCall).filter((call): call is AssistantToolCall => call !== null);
     if (assistantCalls.length > 0) messages.push({ role: 'assistant', tool_calls: assistantCalls });
@@ -292,13 +327,13 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       for (const call of state.pendingCalls) {
         const complete = assistantToolCall(call);
         if (!complete) {
-          events.push({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
+          addEvent({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
           continue;
         }
-        events.push({ type: 'tool', id: complete.id, name: complete.function.name });
-        events.push({ type: 'tool_result', id: complete.id, name: complete.function.name, ok: false, errorCode: 'tool_limit_reached' });
+        addEvent({ type: 'tool', id: complete.id, name: complete.function.name });
+        addEvent({ type: 'tool_result', id: complete.id, name: complete.function.name, ok: false, errorCode: 'tool_limit_reached' });
       }
-      events.push({ type: 'error', message: 'Model returned tool calls after tools were disabled' });
+      addEvent({ type: 'error', message: 'Model returned tool calls after tools were disabled' });
       return { events, messages, finalized: true, pendingCalls: [], resumeModelAfterTools: false };
     }
 
@@ -309,12 +344,12 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       if (state.signal?.aborted) return { finalized: true, terminated: true };
       const complete = assistantToolCall(call);
       if (!complete) {
-        events.push({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
+        addEvent({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
         forceFinalAnswer = true;
         hasInvalidToolCall = true;
         continue;
       }
-      events.push({ type: 'tool', id: complete.id, name: complete.function.name });
+      addEvent({ type: 'tool', id: complete.id, name: complete.function.name });
       let result: ToolExecutionResult;
       if (toolCalls >= MAX_TOOL_CALLS) {
         result = { ok: false, name: complete.function.name, errorCode: 'tool_limit_reached' };
@@ -341,18 +376,21 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
         }
       }
       if (state.signal?.aborted) return { finalized: true, terminated: true };
-      events.push(resultEvent(complete.id, complete.function.name, result));
+      addEvent(resultEvent(complete.id, complete.function.name, result));
       messages.push({ role: 'tool', tool_call_id: complete.id, content: JSON.stringify(result) });
     }
     if (hasInvalidToolCall) addInvalidToolCallInstruction(messages);
     const toolRounds = state.toolRounds + 1;
+    const currentStep = nextStep(state.plan, state.currentStep);
+    const planComplete = state.plan.length > 0 && currentStep >= state.plan.length;
     return {
       events,
       messages,
       pendingCalls: [],
       toolCalls,
       toolRounds,
-      forceFinalAnswer: forceFinalAnswer || toolRounds >= MAX_TOOL_ROUNDS || toolCalls >= MAX_TOOL_CALLS,
+      currentStep,
+      forceFinalAnswer: forceFinalAnswer || planComplete || toolRounds >= MAX_TOOL_ROUNDS || toolCalls >= MAX_TOOL_CALLS,
       resumeModelAfterTools: true
     };
   };

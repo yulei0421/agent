@@ -35,6 +35,7 @@ export const AgentStateAnnotation = Annotation.Root({
   finalized: Annotation<boolean>({ reducer: (_left, right) => right, default: () => false }),
   terminated: Annotation<boolean>({ reducer: (_left, right) => right, default: () => false }),
   events: Annotation<AgentSseEvent[]>({ reducer: (left, right) => left.concat(right), default: () => [] }),
+  onEvent: Annotation<((event: AgentSseEvent) => void) | undefined>({ reducer: (_left, right) => right, default: () => undefined }),
   signal: Annotation<AbortSignal | undefined>({ reducer: (_left, right) => right, default: () => undefined }),
   ip: Annotation<string>({ reducer: (_left, right) => right, default: () => '' }),
   now: Annotation<() => Date>({ reducer: (_left, right) => right, default: () => () => new Date() })
@@ -42,8 +43,6 @@ export const AgentStateAnnotation = Annotation.Root({
 
 export type AgentGraphState = typeof AgentStateAnnotation.State;
 export type AgentGraphUpdate = typeof AgentStateAnnotation.Update;
-
-export type Planner = (goal: string, signal?: AbortSignal) => Promise<readonly string[]>;
 
 export function normalizePlan(steps: readonly string[]): string[] {
   return steps

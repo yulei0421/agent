@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export function Login({ onLogin }) {
+export function Login({ onLogin }: { onLogin(name: string): void | Promise<void> }) {
   const [name, setName] = useState('');
 
   return (

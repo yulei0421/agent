@@ -1,5 +1,5 @@
 export type ChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
-export type FinancialContext = { financial: { tab: string; symbol: string } };
+export type FinancialContext = { financial: { tab: import('../types.js').FinancialTab; symbol: string } };
 export type StreamEvent =
   | { type: 'delta' | 'reasoning'; content: string }
   | { type: 'tool'; id?: string; name: string }

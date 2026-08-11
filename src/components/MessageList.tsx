@@ -1,6 +1,7 @@
-import { MessageItem } from './MessageItem.tsx';
+import { MessageItem } from './MessageItem.js';
+import type { ChatRecord } from '../types.js';
 
-export function MessageList({ messages, streaming }) {
+export function MessageList({ messages, streaming }: { messages: readonly ChatRecord[]; streaming: boolean }) {
   if (messages.length === 0) {
     return (
       <section className="message-list chat-empty-list" aria-live="polite">

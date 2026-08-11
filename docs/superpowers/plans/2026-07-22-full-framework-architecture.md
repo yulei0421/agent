@@ -166,7 +166,7 @@ assert.deepEqual(events.map((event) => event.type), ['tool', 'tool_result', 'del
 
 - [ ] **Step 2: 扩充图状态**
 
-状态必须含 `messages`、`plan`、`pendingCalls`、`toolRounds`、`toolCalls`、`forceFinalAnswer`、`finalized`、`events` 和取消信号；计划最多三步且不进入模型提示词或 SSE。
+状态必须含 `messages`、`plan`、`pendingCalls`、`toolRounds`、`toolCalls`、`forceFinalAnswer`、`finalized`、`events` 和取消信号；计划最多三步，且不得进入 SSE、客户端消息、持久化历史或日志；当前计划步骤可作为服务端拥有的内部 system instruction 进入模型请求，用于约束模型的下一次工具选择或最终回答。
 
 - [ ] **Step 3: 实现五个节点与条件边**
 

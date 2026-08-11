@@ -1,4 +1,7 @@
-const financialTabs = [
+import type { RefObject } from 'react';
+import type { FinancialTab } from '../types.js';
+
+const financialTabs: ReadonlyArray<{ id: FinancialTab; label: string }> = [
   { id: 'markets', label: '行情研究' },
   { id: 'events', label: '事件投研' },
   { id: 'trader', label: '交易员 Copilot' },
@@ -8,11 +11,20 @@ const financialTabs = [
 
 const assets = ['AAPL', '0700.HK', '600519.SH', 'BTC/USDT'];
 
-export function FinancialWorkspace({ activeTab, onTabChange, symbol, onSymbolChange, onOpenChat, researchContextRef }) {
+interface FinancialWorkspaceProps {
+  activeTab: FinancialTab;
+  onTabChange(tab: FinancialTab): void;
+  symbol: string;
+  onSymbolChange(symbol: string): void;
+  onOpenChat(): void;
+  researchContextRef: RefObject<HTMLElement | null>;
+}
+
+export function FinancialWorkspace({ activeTab, onTabChange, symbol, onSymbolChange, onOpenChat, researchContextRef }: FinancialWorkspaceProps) {
   const activeLabel = financialTabs.find((tab) => tab.id === activeTab)?.label;
 
   return (
-    <section className="financial-research-workbench" aria-label="金融工作台" ref={researchContextRef} tabIndex="-1">
+    <section className="financial-research-workbench" aria-label="金融工作台" ref={researchContextRef} tabIndex={-1}>
       <nav className="financial-workbench-nav" role="tablist" aria-label="金融工作台导航">
         <p className="eyebrow">研究导航</p>
         {financialTabs.map((tab) => (

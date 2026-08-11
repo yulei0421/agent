@@ -466,7 +466,7 @@ test('searchAssets preserves the server cancellation response as an AbortError',
 test('financial search renders remote results and selection sets the active research symbol', async () => {
   const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
 
-  assert.match(source, /searchAssets\(assetQuery, assetSearchAbortRef\.current\.signal\)/);
+  assert.match(source, /searchAssets\(query, controller\.signal\)/);
   assert.match(source, /role="listbox"/);
   assert.match(source, /role="option"/);
   assert.match(source, /setFinancialSymbol\(result\.symbol\)/);

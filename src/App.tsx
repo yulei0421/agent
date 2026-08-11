@@ -1,36 +1,43 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { streamChat } from './lib/chat.js';
+import { createTypewriter } from './lib/typewriter.js';
 import { searchAssets } from './lib/market.js';
 import { clear, getAll, id, now, put, remove } from './lib/db.js';
 import { buildModelMessages, normalizeInterruptedMessages } from './lib/history.js';
 import { connectStatusSocket } from './lib/websocket.js';
-import { Login } from './components/Login.tsx';
-import { Sidebar } from './components/Sidebar.tsx';
-import { ChatWindow } from './components/ChatWindow.tsx';
-import { StatusBar } from './components/StatusBar.tsx';
-import { FinancialWorkspace } from './components/FinancialWorkspace.tsx';
+import { Login } from './components/Login.js';
+import { Sidebar } from './components/Sidebar.js';
+import { ChatWindow } from './components/ChatWindow.js';
+import { StatusBar } from './components/StatusBar.js';
+import { FinancialWorkspace } from './components/FinancialWorkspace.js';
+import type { AssetSearchResult } from './lib/market.js';
+import type { ChatRecord, AssetSearchState, FinancialTab, LocalUser, Session, ToolEvent, WebSocketStatus } from './types.js';
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : '未知错误';
+}
 
 export default function App() {
   const [ready, setReady] = useState(false);
-  const [user, setUser] = useState(null);
-  const [sessions, setSessions] = useState([]);
-  const [messages, setMessages] = useState([]);
+  const [user, setUser] = useState<LocalUser | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [messages, setMessages] = useState<ChatRecord[]>([]);
   const [activeSessionId, setActiveSessionId] = useState('');
-  const [wsStatus, setWsStatus] = useState('connecting');
+  const [wsStatus, setWsStatus] = useState<WebSocketStatus>('connecting');
   const [notice, setNotice] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState('');
   const [financialMode, setFinancialMode] = useState(false);
-  const [financialTab, setFinancialTab] = useState('markets');
+  const [financialTab, setFinancialTab] = useState<FinancialTab>('markets');
   const [financialSymbol, setFinancialSymbol] = useState('AAPL');
   const [assetQuery, setAssetQuery] = useState('AAPL');
-  const [assetResults, setAssetResults] = useState([]);
-  const [assetSearchState, setAssetSearchState] = useState('idle');
+  const [assetResults, setAssetResults] = useState<AssetSearchResult[]>([]);
+  const [assetSearchState, setAssetSearchState] = useState<AssetSearchState>('idle');
   const [activeAssetIndex, setActiveAssetIndex] = useState(-1);
   const [assetSearchOpen, setAssetSearchOpen] = useState(false);
-  const abortRef = useRef(null);
-  const assetSearchAbortRef = useRef(null);
-  const researchContextRef = useRef(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const assetSearchAbortRef = useRef<AbortController | null>(null);
+  const researchContextRef = useRef<HTMLElement | null>(null);
 
   const activeMessages = useMemo(
     () => messages.filter((message) => message.sessionId === activeSessionId).sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
@@ -40,9 +47,9 @@ export default function App() {
   useEffect(() => {
     async function boot() {
       const [savedUsers, savedSessions, savedMessages] = await Promise.all([
-        getAll('users'),
-        getAll('sessions'),
-        getAll('messages')
+        getAll<LocalUser>('users'),
+        getAll<Session>('sessions'),
+        getAll<ChatRecord>('messages')
       ]);
       setUser(savedUsers[0] ?? null);
       setSessions(savedSessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
@@ -56,7 +63,7 @@ export default function App() {
       setActiveSessionId(savedSessions[0]?.id ?? '');
       setReady(true);
     }
-    boot().catch((err) => setError(`IndexedDB 初始化失败：${err.message}`));
+    boot().catch((err) => setError(`IndexedDB 初始化失败：${errorMessage(err)}`));
   }, []);
 
   useEffect(() => connectStatusSocket((event) => {
@@ -75,14 +82,15 @@ export default function App() {
     }
 
     const timeoutId = window.setTimeout(async () => {
-      assetSearchAbortRef.current = new AbortController();
+      const controller = new AbortController();
+      assetSearchAbortRef.current = controller;
       setAssetSearchState('loading');
       try {
-        const results = await searchAssets(assetQuery, assetSearchAbortRef.current.signal);
+        const results = await searchAssets(query, controller.signal);
         setAssetResults(results);
         setAssetSearchState(results.length ? 'results' : 'empty');
       } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (!(err instanceof Error && err.name === 'AbortError')) {
           setAssetResults([]);
           setAssetSearchState('error');
         }
@@ -101,24 +109,24 @@ export default function App() {
     return () => window.removeEventListener('online', retry);
   });
 
-  async function login(name) {
+  async function login(name: string): Promise<void> {
     const nextUser = { id: 'local-user', name, updatedAt: now() };
     await put('users', nextUser);
     setUser(nextUser);
   }
 
-  async function logout() {
+  async function logout(): Promise<void> {
     setUser(null);
   }
 
-  async function createSession() {
-    const session = { id: id('session'), title: '新会话', createdAt: now(), updatedAt: now() };
+  async function createSession(): Promise<void> {
+    const session: Session = { id: id('session'), title: '新会话', createdAt: now(), updatedAt: now() };
     await put('sessions', session);
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(session.id);
   }
 
-  async function deleteSession(sessionId) {
+  async function deleteSession(sessionId: string): Promise<void> {
     await remove('sessions', sessionId);
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);
     const remainingMessages = messages.filter((message) => message.sessionId !== sessionId);
@@ -128,7 +136,7 @@ export default function App() {
     setActiveSessionId(remainingSessions[0]?.id ?? '');
   }
 
-  async function updateSessionTitle(sessionId, title) {
+  async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
     const session = sessions.find((item) => item.id === sessionId);
     if (!session || session.title !== '新会话') return;
     const updated = { ...session, title: title.slice(0, 20), updatedAt: now() };
@@ -136,11 +144,11 @@ export default function App() {
     setSessions((prev) => prev.map((item) => (item.id === sessionId ? updated : item)));
   }
 
-  async function send(content, queuedId) {
+  async function send(content: string, queuedId?: string): Promise<void> {
     setError('');
     const sessionId = activeSessionId || (await createFirstSession());
-    const userMessage = { id: queuedId || id('msg'), sessionId, role: 'user', content, status: 'done', createdAt: now(), updatedAt: now() };
-    const assistantMessage = { id: id('msg'), sessionId, role: 'assistant', content: '', status: 'streaming', toolEvents: [], createdAt: now(), updatedAt: now() };
+    const userMessage: ChatRecord = { id: queuedId || id('msg'), sessionId, role: 'user', content, status: 'done', createdAt: now(), updatedAt: now() };
+    const assistantMessage: ChatRecord = { id: id('msg'), sessionId, role: 'assistant', content: '', status: 'streaming', toolEvents: [], createdAt: now(), updatedAt: now() };
 
     await put('messages', userMessage);
     await put('messages', assistantMessage);
@@ -149,7 +157,7 @@ export default function App() {
 
     if (!navigator.onLine) {
       await enqueueOffline(userMessage);
-      const queuedAssistant = { ...assistantMessage, status: 'queued', content: '离线中，已加入待重试队列。', updatedAt: now() };
+      const queuedAssistant: ChatRecord = { ...assistantMessage, status: 'queued', content: '离线中，已加入待重试队列。', updatedAt: now() };
       await put('messages', queuedAssistant);
       setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? queuedAssistant : item)));
       return;
@@ -157,15 +165,21 @@ export default function App() {
 
     abortRef.current = new AbortController();
     setStreaming(true);
-    let assistantToolEvents = [];
+    let assistantToolEvents: ToolEvent[] = [];
+    let assistantText = '';
+    const typewriter = createTypewriter((text) => {
+      assistantText = text;
+      setMessages((prev) => prev.map((item) => (
+        item.id === assistantMessage.id ? { ...item, content: text, updatedAt: now() } : item
+      )));
+    });
 
     try {
       const financialContext = financialMode
         ? { financial: { tab: financialTab, symbol: financialSymbol } }
         : undefined;
       const payload = buildModelMessages([...activeMessages, userMessage], 6000);
-      let assistantText = '';
-      function appendToolEvent(event) {
+      function appendToolEvent(event: ToolEvent): void {
         assistantToolEvents = [...assistantToolEvents, event];
         setMessages((prev) => prev.map((item) => (
           item.id === assistantMessage.id
@@ -173,7 +187,9 @@ export default function App() {
             : item
         )));
       }
-      await streamChat(payload, abortRef.current.signal, {
+      const controller = abortRef.current;
+      if (!controller) throw new Error('聊天请求未初始化');
+      await streamChat(payload, controller.signal, {
         onTool(event) {
           appendToolEvent(event);
         },
@@ -186,18 +202,17 @@ export default function App() {
           )));
         },
         onDelta(delta) {
-          assistantText += delta;
-          setMessages((prev) => prev.map((item) => (
-            item.id === assistantMessage.id ? { ...item, content: assistantText, updatedAt: now() } : item
-          )));
+          typewriter.push(delta);
         },
         onDone() {}
       }, financialContext);
+      await typewriter.drain();
       await put('messages', { ...assistantMessage, content: assistantText, status: 'done', toolEvents: assistantToolEvents, updatedAt: now() });
       setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, status: 'done' } : item)));
     } catch (err) {
-      if (err.name === 'AbortError') {
-        let stoppedAssistant;
+      typewriter.cancel();
+      if (err instanceof Error && err.name === 'AbortError') {
+        let stoppedAssistant: ChatRecord | undefined;
         setMessages((prev) => prev.map((item) => {
           if (item.id !== assistantMessage.id) return item;
           stoppedAssistant = { ...item, status: 'stopped', content: item.content || '已停止生成。', updatedAt: now() };
@@ -206,8 +221,9 @@ export default function App() {
         await put('messages', stoppedAssistant || { ...assistantMessage, status: 'stopped', content: '已停止生成。', toolEvents: assistantToolEvents, updatedAt: now() });
       } else {
         await enqueueOffline(userMessage);
-        setError(err.message);
-        const failedAssistant = { ...assistantMessage, status: 'error', content: `请求失败：${err.message}`, updatedAt: now() };
+        const message = errorMessage(err);
+        setError(message);
+        const failedAssistant: ChatRecord = { ...assistantMessage, status: 'error', content: `请求失败：${message}`, updatedAt: now() };
         failedAssistant.toolEvents = assistantToolEvents;
         await put('messages', failedAssistant);
         setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? failedAssistant : item)));
@@ -218,28 +234,28 @@ export default function App() {
     }
   }
 
-  async function createFirstSession() {
-    const session = { id: id('session'), title: '新会话', createdAt: now(), updatedAt: now() };
+  async function createFirstSession(): Promise<string> {
+    const session: Session = { id: id('session'), title: '新会话', createdAt: now(), updatedAt: now() };
     await put('sessions', session);
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(session.id);
     return session.id;
   }
 
-  async function enqueueOffline(message) {
+  async function enqueueOffline(message: ChatRecord): Promise<void> {
     await put('offlineQueue', { ...message, queuedAt: now() });
   }
 
-  async function retryOfflineQueue() {
-    const queue = await getAll('offlineQueue');
+  async function retryOfflineQueue(): Promise<void> {
+    const queue = await getAll<ChatRecord>('offlineQueue');
     for (const item of queue) {
       await remove('offlineQueue', item.id);
       await send(item.content, item.id);
     }
   }
 
-  async function clearAll() {
-    await Promise.all(['sessions', 'messages', 'offlineQueue'].map((store) => clear(store)));
+  async function clearAll(): Promise<void> {
+    await Promise.all((['sessions', 'messages', 'offlineQueue'] as const).map((store) => clear(store)));
     setSessions([]);
     setMessages([]);
     setActiveSessionId('');
@@ -249,7 +265,7 @@ export default function App() {
     abortRef.current?.abort();
   }
 
-  function selectAsset(result) {
+  function selectAsset(result: AssetSearchResult): void {
     setFinancialSymbol(result.symbol);
     setAssetQuery(result.symbol);
     setAssetResults([]);
@@ -259,7 +275,7 @@ export default function App() {
     researchContextRef.current?.focus();
   }
 
-  function handleAssetSearchKeyDown(event) {
+  function handleAssetSearchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
     if (!assetSearchOpen || !assetResults.length) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -268,7 +284,8 @@ export default function App() {
     }
     if (event.key === 'Enter' && activeAssetIndex >= 0) {
       event.preventDefault();
-      selectAsset(assetResults[activeAssetIndex]);
+      const result = assetResults[activeAssetIndex];
+      if (result) selectAsset(result);
     }
     if (event.key === 'Escape') {
       setAssetResults([]);
@@ -356,7 +373,7 @@ export default function App() {
             </header>
             <FinancialWorkspace
               activeTab={financialTab}
-              onOpenChat={() => document.querySelector('[aria-label="金融对话输入"]')?.focus()}
+              onOpenChat={() => document.querySelector<HTMLInputElement>('[aria-label="金融对话输入"]')?.focus()}
               onSymbolChange={setFinancialSymbol}
               onTabChange={setFinancialTab}
               researchContextRef={researchContextRef}

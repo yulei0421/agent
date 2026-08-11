@@ -74,7 +74,7 @@ test('App preserves early tool events on the streaming assistant message', async
 
   assert.match(source, /const \[financialMode, setFinancialMode\] = useState\(false\)/);
   assert.match(source, /toolEvents:\s*\[\]/);
-  assert.match(source, /function appendToolEvent\(event\)/);
+  assert.match(source, /function appendToolEvent\(event: ToolEvent\): void/);
   assert.match(source, /toolEvents:\s*\[\.\.\.\(item\.toolEvents \?\? \[\]\), event\]/);
   assert.match(source, /onTool\(event\)[\s\S]*appendToolEvent\(event\)/);
   assert.match(source, /onToolResult\(event\)[\s\S]*appendToolEvent\(event\)/);
@@ -84,7 +84,7 @@ test('App sends financial mode as bounded request context instead of a client sy
   const source = await readSource('../src/App.tsx');
 
   assert.match(source, /financialMode\s*\?\s*\{\s*financial:\s*\{\s*tab:\s*financialTab,\s*symbol:\s*financialSymbol\s*}\s*}\s*:\s*undefined/);
-  assert.match(source, /streamChat\(payload, abortRef\.current\.signal,[\s\S]*financialContext\)/);
+  assert.match(source, /streamChat\(payload, controller\.signal,[\s\S]*financialContext\)/);
   assert.doesNotMatch(source, /role:\s*'system',\s*content:\s*`金融工作台/);
 });
 
@@ -94,18 +94,18 @@ test('MessageItem renders generic registry events and result-backed tool cards',
   assert.match(source, /数据来源与工具调用/);
   assert.match(source, /toolEvents\.length/);
   assert.match(source, /event\.type === 'tool'/);
-  assert.match(source, /event\.type !== 'tool_result'/);
+  assert.match(source, /event\.type === 'tool_result' && event\.ok/);
   assert.match(source, /event\.ok/);
-  assert.match(source, /event\.result/);
+  assert.match(source, /toolResult\.result/);
   assert.match(source, /event\.errorCode/);
-  assert.match(source, /event\.result\?\.meta\?\.source/);
-  assert.match(source, /event\.result\?\.meta\?\.asOf/);
-  assert.match(source, /event\.result\?\.meta\?\.delay/);
-  assert.match(source, /event\.result\?\.weather\?\.observedAt/);
-  assert.match(source, /event\.result\?\.weather\?\.ageSeconds/);
+  assert.match(source, /quoteMeta\.source/);
+  assert.match(source, /quoteMeta\.asOf/);
+  assert.match(source, /quoteMeta\.delay/);
+  assert.match(source, /weather\.observedAt/);
+  assert.match(source, /weather\.ageSeconds/);
   assert.match(source, /未解析代码/);
-  assert.match(source, /Array\.isArray\(message\.toolEvents\)/);
-  assert.match(source, /Array\.isArray\(event\.result\?\.sources\)/);
-  assert.match(source, /typeof event === 'object'/);
+  assert.match(source, /eventRecords\(message\.toolEvents\)/);
+  assert.match(source, /Array\.isArray\(result\.sources\)/);
+  assert.match(source, /typeof value === 'object'/);
   assert.doesNotMatch(source, /source\.url|href=\{source\.url\}/);
 });

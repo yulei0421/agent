@@ -334,6 +334,21 @@ test('drops a model error when cancellation arrives while its iterator cleanup i
   assert.deepEqual(await completeWithin(running, '取消后的模型错误不应泄漏'), []);
 });
 
+test('normalizes model failures before publishing them to SSE consumers', async () => {
+  const service = new ChatApplicationService({
+    model: {
+      stream() {
+        throw new Error('provider https://example.invalid exposed a private failure');
+      }
+    },
+    tools: toolExecutor(async (call) => ({ ok: true, name: call.name, result: {} }))
+  });
+
+  const events = await service.run({ messages: [{ role: 'user', content: '测试' }] });
+
+  assert.deepEqual(events, [{ type: 'error', message: 'model_unavailable' }, { type: 'done' }]);
+});
+
 test('ignores a synchronous iterator cleanup failure after the model has finished', async () => {
   const service = new ChatApplicationService({
     model: {
@@ -614,8 +629,8 @@ test('consumes a planner rejection that arrives after cancellation has completed
   }
 });
 
-test('converts a planner failure into one error event followed by done', async () => {
-  const model = modelClient([{ type: 'delta', content: '不应执行' }, { type: 'done' }]);
+test('continues after a planner failure without publishing an error', async () => {
+  const model = modelClient([{ type: 'done' }]);
   const service = new ChatApplicationService({
     model,
     planner: async () => {
@@ -626,14 +641,14 @@ test('converts a planner failure into one error event followed by done', async (
 
   const events = await service.run({ messages: [{ role: 'user', content: '上海天气' }] });
 
-  assert.equal(model.requests.length, 0);
-  assert.deepEqual(events.map((event) => event.type), ['error', 'done']);
-  assert.deepEqual(events[0], { type: 'error', message: '规划服务暂不可用' });
+  assert.equal(model.requests.length, 1);
+  assert.deepEqual(events.map((event) => event.type), ['done']);
+  assert.equal(events.some((event) => event.type === 'error'), false);
   assert.equal(events.filter((event) => event.type === 'done').length, 1);
 });
 
-test('converts an invalid planner result into a controlled error without starting the model', async () => {
-  const model = modelClient([{ type: 'delta', content: '不应执行' }, { type: 'done' }]);
+test('continues after a null planner result without publishing an error', async () => {
+  const model = modelClient([{ type: 'done' }]);
   let toolCalls = 0;
   const service = new ChatApplicationService({
     model,
@@ -646,15 +661,15 @@ test('converts an invalid planner result into a controlled error without startin
 
   const events = await service.run({ messages: [{ role: 'user', content: '上海天气' }] });
 
-  assert.equal(model.requests.length, 0);
+  assert.equal(model.requests.length, 1);
   assert.equal(toolCalls, 0);
-  assert.deepEqual(events.map((event) => event.type), ['error', 'done']);
-  assert.deepEqual(events[0], { type: 'error', message: 'Planning request failed' });
+  assert.deepEqual(events.map((event) => event.type), ['done']);
+  assert.equal(events.some((event) => event.type === 'error'), false);
   assert.equal(events.filter((event) => event.type === 'done').length, 1);
 });
 
-test('converts an undefined planner result into a controlled error without starting the model', async () => {
-  const model = modelClient([{ type: 'delta', content: '不应执行' }, { type: 'done' }]);
+test('continues after an undefined planner result without publishing an error', async () => {
+  const model = modelClient([{ type: 'done' }]);
   let toolCalls = 0;
   const service = new ChatApplicationService({
     model,
@@ -667,14 +682,14 @@ test('converts an undefined planner result into a controlled error without start
 
   const events = await service.run({ messages: [{ role: 'user', content: '上海天气' }] });
 
-  assert.equal(model.requests.length, 0);
+  assert.equal(model.requests.length, 1);
   assert.equal(toolCalls, 0);
-  assert.deepEqual(events.map((event) => event.type), ['error', 'done']);
-  assert.deepEqual(events[0], { type: 'error', message: 'Planning request failed' });
+  assert.deepEqual(events.map((event) => event.type), ['done']);
+  assert.equal(events.some((event) => event.type === 'error'), false);
 });
 
-test('rejects a planner array containing a non-string value without starting the model', async () => {
-  const model = modelClient([{ type: 'delta', content: '不应执行' }, { type: 'done' }]);
+test('continues after a non-string planner item without publishing an error', async () => {
+  const model = modelClient([{ type: 'done' }]);
   let toolCalls = 0;
   const service = new ChatApplicationService({
     model,
@@ -687,10 +702,10 @@ test('rejects a planner array containing a non-string value without starting the
 
   const events = await service.run({ messages: [{ role: 'user', content: '上海天气' }] });
 
-  assert.equal(model.requests.length, 0);
+  assert.equal(model.requests.length, 1);
   assert.equal(toolCalls, 0);
-  assert.deepEqual(events.map((event) => event.type), ['error', 'done']);
-  assert.deepEqual(events[0], { type: 'error', message: 'Planning request failed' });
+  assert.deepEqual(events.map((event) => event.type), ['done']);
+  assert.equal(events.some((event) => event.type === 'error'), false);
   assert.equal(events.filter((event) => event.type === 'done').length, 1);
 });
 

@@ -150,8 +150,8 @@ test('the server creates one model-directed registry and the UI renders its gene
   assert.doesNotMatch(windowSource, /自动联网|固定数据源/);
   assert.doesNotMatch(appSource, /webSearch/);
   assert.match(itemSource, /event\.type === 'tool'/);
-  assert.match(itemSource, /event\.type !== 'tool_result'/);
-  assert.match(itemSource, /event\.result/);
+  assert.match(itemSource, /event\.type === 'tool_result' && event\.ok/);
+  assert.match(itemSource, /toolResult\.result/);
   assert.match(itemSource, /event\.ok/);
   assert.match(itemSource, /event\.errorCode/);
   assert.match(itemSource, /event\.name === 'get_weather'/);

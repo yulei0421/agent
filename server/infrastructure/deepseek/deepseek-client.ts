@@ -20,6 +20,8 @@ export class DeepSeekClient implements ModelClient {
   }
 
   async *stream(request: ModelRequest, signal: AbortSignal): AsyncIterable<DeepSeekSseEvent> {
+    if (signal.aborted) throw new AppError('request_aborted');
+
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.options.baseUrl}/chat/completions`, {
@@ -34,7 +36,8 @@ export class DeepSeekClient implements ModelClient {
           tools: request.forceFinalAnswer ? [] : request.tools,
           tool_choice: 'auto',
           stream: true,
-          thinking: { type: 'disabled' }
+          thinking: { type: 'disabled' },
+          ...(request.responseFormat ? { response_format: request.responseFormat } : {})
         }),
         signal
       });
@@ -43,6 +46,7 @@ export class DeepSeekClient implements ModelClient {
       throw new AppError('model_unavailable', error instanceof Error ? error.message : 'Model request failed');
     }
 
+    if (signal.aborted) throw new AppError('request_aborted');
     if (!response.ok || !response.body) {
       throw new AppError('model_unavailable', `Model request failed with status ${response.status}`);
     }
@@ -56,13 +60,19 @@ export class DeepSeekClient implements ModelClient {
         parser.push(decoder.decode(chunk, { stream: true }));
         while (pending.length > 0) {
           const event = pending.shift();
-          if (event) yield event;
+          if (event) {
+            if (signal.aborted) throw new AppError('request_aborted');
+            yield event;
+          }
         }
       }
       parser.flush();
       while (pending.length > 0) {
         const event = pending.shift();
-        if (event) yield event;
+        if (event) {
+          if (signal.aborted) throw new AppError('request_aborted');
+          yield event;
+        }
       }
     } catch (error) {
       if (error instanceof AppError) throw error;

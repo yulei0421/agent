@@ -1,4 +1,6 @@
-export function StatusBar({ wsStatus, notice, error, online }) {
+import type { WebSocketStatus } from '../types.js';
+
+export function StatusBar({ wsStatus, notice, error, online }: { wsStatus: WebSocketStatus; notice: string; error: string; online: boolean }) {
   return (
     <header className="status-bar">
       <span className={`dot ${online ? 'ok' : 'bad'}`} />

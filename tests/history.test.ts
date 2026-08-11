@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildModelMessages, normalizeInterruptedMessages, trimHistory } from '../src/lib/history.js';
+import type { ModelHistoryMessage } from '../src/lib/history.js';
 
 test('trimHistory keeps newest messages within max character budget', () => {
-  const messages = [
+  const messages: ModelHistoryMessage[] = [
     { role: 'user', content: 'old-12345' },
     { role: 'assistant', content: 'middle' },
     { role: 'user', content: 'latest' }

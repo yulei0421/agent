@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import type { LocalUser, Session } from '../types.js';
 
-function formatHistoryTime(timestamp) {
+function formatHistoryTime(timestamp: string): string {
   const value = new Date(timestamp);
   if (Number.isNaN(value.getTime())) return '刚刚';
 
@@ -24,7 +25,20 @@ function ConversationIcon() {
   );
 }
 
-export function Sidebar({ user, sessions, activeSessionId, financialMode, onFinancialMode, onCreate, onSelect, onDelete, onLogout, onClear }) {
+interface SidebarProps {
+  user: LocalUser;
+  sessions: readonly Session[];
+  activeSessionId: string;
+  financialMode: boolean;
+  onFinancialMode(): void;
+  onCreate(): void | Promise<void>;
+  onSelect(id: string): void;
+  onDelete(id: string): void | Promise<void>;
+  onLogout(): void | Promise<void>;
+  onClear(): void | Promise<void>;
+}
+
+export function Sidebar({ user, sessions, activeSessionId, financialMode, onFinancialMode, onCreate, onSelect, onDelete, onLogout, onClear }: SidebarProps) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const visibleSessions = historyExpanded ? sessions : sessions.slice(0, 5);
 

@@ -33,14 +33,15 @@ test('stylesheet provides the streaming visual contract and reduced-motion fallb
   assert.match(source, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
 
-test('stylesheet provides the Aurora Command glassmorphism contract', async () => {
+test('stylesheet provides the paper-terminal visual contract', async () => {
   const source = await readSource('../src/styles.css');
 
-  assert.match(source, /--accent-gradient:\s*linear-gradient\(135deg, #18c8e8 0%, #7056f5 100%\)/);
-  assert.match(source, /--glass-blur:\s*20px/);
-  assert.match(source, /backdrop-filter:\s*blur\(var\(--glass-blur\)\)/);
+  assert.match(source, /--accent:\s*#0f766e/);
+  assert.match(source, /--canvas:\s*#f4f1e8/);
+  assert.match(source, /background:\s*radial-gradient\(circle at 14% 0%, rgba\(15, 118, 110, 0\.12\), transparent 28rem\)/);
+  assert.doesNotMatch(source, /#7056f5|#18c8e8|glass-blur/);
   assert.match(source, /\.app-shell[\s\S]*border-radius:\s*var\(--radius-panel\)/);
-  assert.match(source, /button:hover:not\(:disabled\)[\s\S]*translateY\(-4px\)/);
+  assert.match(source, /button:hover:not\(:disabled\)[\s\S]*translateY\(-1px\)/);
   assert.match(source, /button:active:not\(:disabled\)[\s\S]*scale\(0\.98\)/);
   assert.match(source, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });
