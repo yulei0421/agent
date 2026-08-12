@@ -1,12 +1,11 @@
 import { isIP } from 'node:net';
-import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult, ToolRegistry } from '../types.js';
+import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult } from '../domain/tools/tool.types.js';
+import type { ToolManifest, ToolManifestRegistry } from '../domain/tools/tool.types.js';
 
 const OMIT = Symbol('omit');
 type OmitValue = typeof OMIT;
 type UnknownRecord = Record<string, unknown>;
 type ToolName = 'get_weather' | 'search_news' | 'search_asset' | 'get_quote';
-type FieldRule = { maxLength: number; required: boolean };
-type ToolContract = { description: string; fields: Record<string, FieldRule> };
 type Normalizer = (value: unknown) => unknown | OmitValue;
 
 interface LiveContextInput {
@@ -16,7 +15,7 @@ interface LiveContextInput {
   signal?: AbortSignal;
 }
 
-interface RegistryDependencies {
+export interface RegistryDependencies {
   liveContext?: (input: LiveContextInput) => Promise<UnknownRecord | undefined>;
   webSearch?: (query: string, options: { now: Date; signal?: AbortSignal }) => Promise<UnknownRecord | undefined>;
   assetSearch?: (query: string, options: { signal?: AbortSignal }) => Promise<unknown>;
@@ -24,55 +23,18 @@ interface RegistryDependencies {
     getQuote(symbol: string, options: { signal?: AbortSignal }): Promise<UnknownRecord | undefined>;
   };
   now?: () => Date;
+  timeoutScheduler?: TimeoutScheduler;
+}
+
+interface TimeoutScheduler {
+  setTimeout(callback: () => void, timeoutMs: number): ReturnType<typeof globalThis.setTimeout>;
+  clearTimeout(timeout: ReturnType<typeof globalThis.setTimeout>): void;
 }
 
 type ParsedCall =
-  | { ok: true; name: ToolName; arguments: Record<string, string> }
+  | { ok: true; manifest: ToolManifest; arguments: Record<string, string> }
   | { ok: false; name: string; errorCode: string };
 type ToolFailure = Extract<ToolExecutionResult, { ok: false }>;
-
-const TOOL_CONTRACTS: Readonly<Record<ToolName, ToolContract>> = Object.freeze({
-  get_weather: {
-    description: '查询指定城市或当前用户所在地的实时天气。',
-    fields: { city: { maxLength: 64, required: false } }
-  },
-  search_news: {
-    description: '检索与查询主题相关的近期新闻和报道。',
-    fields: { query: { maxLength: 120, required: true } }
-  },
-  search_asset: {
-    description: '根据名称或代码查找可查询行情的金融资产。',
-    fields: { query: { maxLength: 64, required: true } }
-  },
-  get_quote: {
-    description: '查询已确认市场代码的最新报价和数据时间。',
-    fields: { symbol: { maxLength: 32, required: true } }
-  }
-});
-
-const TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze(
-  (Object.entries(TOOL_CONTRACTS) as [ToolName, ToolContract][]).map<ToolDefinition>(([name, contract]) => ({
-    type: 'function',
-    function: {
-      name,
-      description: contract.description,
-      parameters: {
-        type: 'object',
-        properties: Object.fromEntries(
-          Object.entries(contract.fields).map(([field, rule]) => [field, { type: 'string', maxLength: rule.maxLength }])
-        ),
-        ...(Object.values(contract.fields).some((rule) => rule.required)
-          ? { required: Object.entries(contract.fields).filter(([, rule]) => rule.required).map(([field]) => field) }
-          : {}),
-        additionalProperties: false
-      }
-    }
-  }))
-);
-
-function isToolName(value: string): value is ToolName {
-  return Object.hasOwn(TOOL_CONTRACTS, value);
-}
 
 function failure(name: unknown, errorCode: string): ToolFailure {
   return { ok: false, name: safeResultString(name) ? name : 'unknown', errorCode };
@@ -86,9 +48,10 @@ function isObject(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseCall(call: ToolCall): ParsedCall {
+function parseCall(call: ToolCall, manifests: readonly ToolManifest[]): ParsedCall {
   const name = call.name;
-  if (!isToolName(name)) return failure(name, 'unknown_tool');
+  const manifest = manifests.find((candidate) => candidate.name === name);
+  if (!manifest) return failure(name, 'unknown_tool');
 
   let argumentsValue: unknown;
   try {
@@ -98,18 +61,18 @@ function parseCall(call: ToolCall): ParsedCall {
   }
   if (!isObject(argumentsValue)) return failure(name, 'invalid_arguments');
 
-  const contract = TOOL_CONTRACTS[name];
+  const { parameters } = manifest.definition.function;
   const keys = Object.keys(argumentsValue);
-  if (keys.some((key) => !Object.hasOwn(contract.fields, key))) return failure(name, 'invalid_arguments');
-  for (const [key, rule] of Object.entries(contract.fields)) {
+  if (keys.some((key) => !Object.hasOwn(parameters.properties, key))) return failure(name, 'invalid_arguments');
+  for (const [key, rule] of Object.entries(parameters.properties)) {
     const value = argumentsValue[key];
-    if ((rule.required && !Object.hasOwn(argumentsValue, key))
+    if (((parameters.required?.includes(key) ?? false) && !Object.hasOwn(argumentsValue, key))
       || (Object.hasOwn(argumentsValue, key)
         && (typeof value !== 'string' || value.trim().length === 0 || value.length > rule.maxLength))) {
       return failure(name, 'invalid_arguments');
     }
   }
-  return { ok: true, name, arguments: argumentsValue as Record<string, string> };
+  return { ok: true, manifest, arguments: argumentsValue as Record<string, string> };
 }
 
 function errorCode(value: unknown): string | undefined {
@@ -237,109 +200,159 @@ function normalizeWeather(response: UnknownRecord): UnknownRecord {
   return result;
 }
 
-export function createToolRegistry({
-  liveContext,
-  webSearch,
-  marketGateway,
-  assetSearch,
-  now = () => new Date()
-}: RegistryDependencies = {}): ToolRegistry {
-  async function execute(call: ToolCall, context: ToolExecutionContext = {}): Promise<ToolExecutionResult> {
-    const parsed = parseCall(call);
-    if (!parsed.ok) return parsed;
-    if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
+const TOOL_TIMEOUT_MS = 10_000;
 
-    if (parsed.name === 'get_weather') {
-      if (!liveContext) return failure(parsed.name, 'tool_unavailable');
-      try {
-        const response = await liveContext({
-          ip: context.ip ?? '',
-          content: parsed.arguments.city ? `${parsed.arguments.city}天气` : '天气',
-          now: context.now ?? now,
-          ...(context.signal ? { signal: context.signal } : {})
-        });
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'weather_unavailable'));
-        return { ok: true, name: parsed.name, result: normalizeWeather(response) };
-      } catch (caught) {
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        return failure(parsed.name, safeErrorCode(errorCode(caught), 'weather_unavailable'));
-      }
-    }
+function definition(name: ToolName, description: string, properties: ToolDefinition['function']['parameters']['properties'], required: string[] = []): ToolDefinition {
+  const frozenProperties = Object.fromEntries(
+    Object.entries(properties).map(([field, rule]) => [field, Object.freeze({ ...rule })])
+  );
+  return Object.freeze({
+    type: 'function' as const,
+    function: Object.freeze({
+      name,
+      description,
+      parameters: Object.freeze({
+        type: 'object' as const,
+        properties: Object.freeze(frozenProperties),
+        ...(required.length > 0 ? { required: Object.freeze(required) } : {}),
+        additionalProperties: false as const
+      })
+    })
+  });
+}
 
-    if (parsed.name === 'search_news') {
-      if (!webSearch) return failure(parsed.name, 'tool_unavailable');
-      try {
-        const response = await webSearch(parsed.arguments.query ?? '', {
-          now: resolvedDate(context.now ?? now),
-          signal: context.signal
-        });
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        if (!response?.ok) return failure(parsed.name, safeErrorCode(response?.errorCode, 'news_unavailable'));
-        return { ok: true, name: parsed.name, result: normalizeNews(response) };
-      } catch (caught) {
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        return failure(parsed.name, safeErrorCode(errorCode(caught), 'news_unavailable'));
-      }
-    }
-
-    if (parsed.name === 'search_asset') {
-      if (!assetSearch) return failure(parsed.name, 'not_found');
-      try {
-        const assets = await assetSearch(parsed.arguments.query ?? '', { signal: context.signal });
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        if (isObject(assets) && assets.errorCode === 'request_aborted') return failure(parsed.name, 'request_aborted');
-        if (!Array.isArray(assets)) return failure(parsed.name, 'not_found');
-        const result = assets
-          .filter(isObject)
-          .map((asset) => normalizeFields(asset, {
-            symbol: (value) => stableId(value, 64),
-            name: (value) => text(value, 200),
-            market: (value) => stableId(value, 32),
-            type: (value) => stableId(value, 32),
-            source: (value) => stableId(value, 128)
-          }))
-          .filter((asset) => Object.keys(asset).length > 0)
-          .slice(0, 5);
-        return result.length > 0 ? { ok: true, name: parsed.name, result } : failure(parsed.name, 'not_found');
-      } catch {
-        if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-        return failure(parsed.name, 'not_found');
-      }
-    }
-
-    if (!marketGateway) return failure(parsed.name, 'tool_unavailable');
-    try {
-      const response = await marketGateway.getQuote(parsed.arguments.symbol ?? '', { signal: context.signal });
-      if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-      if (!response?.ok) return failure(parsed.name, safeErrorCode(isObject(response?.error) ? response.error.code : undefined, 'provider_unavailable'));
-      return {
-        ok: true,
-        name: parsed.name,
-        result: {
-          data: normalizeFields(response.data, {
-            price: (value) => boundedNumber(value, 0, 1000000000000),
-            changePercent: (value) => boundedNumber(value, -1000000, 1000000),
-            currency: (value) => stableId(value, 16)
-          }),
-          meta: normalizeFields(response.meta, {
-            source: (value) => stableId(value, 128),
-            asOf: isoTimestamp,
-            observedAt: isoTimestamp,
-            fetchedAt: isoTimestamp,
-            ageSeconds: (value) => boundedNumber(value, 0, 315360000),
-            delay: (value) => stableId(value, 64),
-            symbol: (value) => stableId(value, 64),
-            confidence: (value) => stableId(value, 64),
-            cached: strictBoolean
-          })
-        }
-      };
-    } catch (caught) {
-      if (isAborted(context.signal)) return failure(parsed.name, 'request_aborted');
-      return failure(parsed.name, safeErrorCode(errorCode(caught), 'provider_unavailable'));
-    }
+async function executeWeather(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  const { liveContext, now = () => new Date() } = dependencies;
+  if (!liveContext) return failure('get_weather', 'tool_unavailable');
+  try {
+    const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
+    const response = await liveContext({ ip: context.ip ?? '', content: argumentsValue.city ? `${argumentsValue.city}天气` : '天气', now: context.now ?? now, signal: context.signal });
+    if (isAborted(context.signal)) return failure('get_weather', 'request_aborted');
+    if (!response?.ok) return failure('get_weather', safeErrorCode(response?.errorCode, 'weather_unavailable'));
+    return { ok: true, name: 'get_weather', result: normalizeWeather(response) };
+  } catch (caught) {
+    return isAborted(context.signal) ? failure('get_weather', 'request_aborted') : failure('get_weather', safeErrorCode(errorCode(caught), 'weather_unavailable'));
   }
+}
 
-  return { definitions: () => TOOL_DEFINITIONS, execute };
+async function executeNews(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  const { webSearch, now = () => new Date() } = dependencies;
+  if (!webSearch) return failure('search_news', 'tool_unavailable');
+  try {
+    const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
+    const response = await webSearch(argumentsValue.query ?? '', { now: resolvedDate(context.now ?? now), signal: context.signal });
+    if (isAborted(context.signal)) return failure('search_news', 'request_aborted');
+    if (!response?.ok) return failure('search_news', safeErrorCode(response?.errorCode, 'news_unavailable'));
+    return { ok: true, name: 'search_news', result: normalizeNews(response) };
+  } catch (caught) {
+    return isAborted(context.signal) ? failure('search_news', 'request_aborted') : failure('search_news', safeErrorCode(errorCode(caught), 'news_unavailable'));
+  }
+}
+
+async function executeAssetSearch(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  const { assetSearch } = dependencies;
+  if (!assetSearch) return failure('search_asset', 'not_found');
+  try {
+    const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
+    const assets = await assetSearch(argumentsValue.query ?? '', { signal: context.signal });
+    if (isAborted(context.signal)) return failure('search_asset', 'request_aborted');
+    if (isObject(assets) && assets.errorCode === 'request_aborted') return failure('search_asset', 'request_aborted');
+    if (!Array.isArray(assets)) return failure('search_asset', 'not_found');
+    const result = assets.filter(isObject).map((asset) => normalizeFields(asset, {
+      symbol: (value) => stableId(value, 64), name: (value) => text(value, 200), market: (value) => stableId(value, 32), type: (value) => stableId(value, 32), source: (value) => stableId(value, 128)
+    })).filter((asset) => Object.keys(asset).length > 0).slice(0, 5);
+    return result.length > 0 ? { ok: true, name: 'search_asset', result } : failure('search_asset', 'not_found');
+  } catch {
+    return isAborted(context.signal) ? failure('search_asset', 'request_aborted') : failure('search_asset', 'not_found');
+  }
+}
+
+async function executeQuote(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  const { marketGateway } = dependencies;
+  if (!marketGateway) return failure('get_quote', 'tool_unavailable');
+  try {
+    const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
+    const response = await marketGateway.getQuote(argumentsValue.symbol ?? '', { signal: context.signal });
+    if (isAborted(context.signal)) return failure('get_quote', 'request_aborted');
+    if (!response?.ok) return failure('get_quote', safeErrorCode(isObject(response?.error) ? response.error.code : undefined, 'provider_unavailable'));
+    return { ok: true, name: 'get_quote', result: {
+      data: normalizeFields(response.data, { price: (value) => boundedNumber(value, 0, 1000000000000), changePercent: (value) => boundedNumber(value, -1000000, 1000000), currency: (value) => stableId(value, 16) }),
+      meta: normalizeFields(response.meta, { source: (value) => stableId(value, 128), asOf: isoTimestamp, observedAt: isoTimestamp, fetchedAt: isoTimestamp, ageSeconds: (value) => boundedNumber(value, 0, 315360000), delay: (value) => stableId(value, 64), symbol: (value) => stableId(value, 64), confidence: (value) => stableId(value, 64), cached: strictBoolean })
+    } };
+  } catch (caught) {
+    return isAborted(context.signal) ? failure('get_quote', 'request_aborted') : failure('get_quote', safeErrorCode(errorCode(caught), 'provider_unavailable'));
+  }
+}
+
+type ToolImplementation = (call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies) => Promise<ToolExecutionResult>;
+
+function manifest(name: ToolName, definitionValue: ToolDefinition, implementation: ToolImplementation, dependencies: RegistryDependencies): ToolManifest {
+  return Object.freeze({
+    name,
+    version: '1.0.0',
+    riskLevel: 'read_only' as const,
+    timeoutMs: TOOL_TIMEOUT_MS,
+    definition: definitionValue,
+    execute: (call: ToolCall, context: ToolExecutionContext) => implementation(call, context, dependencies)
+  });
+}
+
+function manifestsFor(dependencies: RegistryDependencies): readonly ToolManifest[] {
+  return Object.freeze([
+    manifest('get_weather', definition('get_weather', '查询指定城市或当前用户所在地的实时天气。', { city: { type: 'string', maxLength: 64 } }), executeWeather, dependencies),
+    manifest('search_news', definition('search_news', '检索与查询主题相关的近期新闻和报道。', { query: { type: 'string', maxLength: 120 } }, ['query']), executeNews, dependencies),
+    manifest('search_asset', definition('search_asset', '根据名称或代码查找可查询行情的金融资产。', { query: { type: 'string', maxLength: 64 } }, ['query']), executeAssetSearch, dependencies),
+    manifest('get_quote', definition('get_quote', '查询已确认市场代码的最新报价和数据时间。', { symbol: { type: 'string', maxLength: 32 } }, ['symbol']), executeQuote, dependencies)
+  ]);
+}
+
+function executeWithBounds(manifest: ToolManifest, call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  if (isAborted(context.signal)) return Promise.resolve(failure(manifest.name, 'request_aborted'));
+  const controller = new AbortController();
+  const childContext = { ...context, signal: controller.signal };
+  const scheduler: TimeoutScheduler = dependencies.timeoutScheduler ?? {
+    setTimeout: (callback, timeoutMs) => globalThis.setTimeout(callback, timeoutMs),
+    clearTimeout: (timeout) => globalThis.clearTimeout(timeout)
+  };
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: ToolExecutionResult) => {
+      if (settled) return;
+      settled = true;
+      scheduler.clearTimeout(timeout);
+      context.signal?.removeEventListener('abort', onParentAbort);
+      resolve(result);
+    };
+    const onParentAbort = () => {
+      controller.abort();
+      finish(failure(manifest.name, 'request_aborted'));
+    };
+    const timeout = scheduler.setTimeout(() => {
+      controller.abort();
+      finish(failure(manifest.name, context.signal?.aborted ? 'request_aborted' : 'tool_execution_timeout'));
+    }, manifest.timeoutMs);
+    context.signal?.addEventListener('abort', onParentAbort, { once: true });
+    void manifest.execute(call, childContext).then(
+      (result) => finish(context.signal?.aborted ? failure(manifest.name, 'request_aborted') : result),
+      () => finish(context.signal?.aborted ? failure(manifest.name, 'request_aborted') : failure(manifest.name, 'tool_execution_failed'))
+    );
+  });
+}
+
+export function createToolRegistry(dependencies: RegistryDependencies = {}): ToolManifestRegistry {
+  const manifests = manifestsFor(dependencies);
+  return {
+    manifests: () => manifests,
+    definitions: () => manifests.map((manifestValue) => manifestValue.definition),
+    async execute(call: ToolCall, context: ToolExecutionContext = {}): Promise<ToolExecutionResult> {
+      const parsed = parseCall(call, manifests);
+      if (!parsed.ok) return parsed;
+      const validatedCall: ToolCall = {
+        ...call,
+        name: parsed.manifest.name,
+        arguments: JSON.stringify(parsed.arguments)
+      };
+      return executeWithBounds(parsed.manifest, validatedCall, context, dependencies);
+    }
+  };
 }

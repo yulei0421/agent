@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createToolRegistryExecutor } from '../server/infrastructure/tools/tool-registry.adapter.js';
 
-test('exposes the legacy registry tool definitions through the application executor contract', () => {
+test('exposes the manifest tool definitions through the application executor contract', () => {
   const executor = createToolRegistryExecutor();
   const definitions = executor.definitions();
 
@@ -15,7 +15,7 @@ test('exposes the legacy registry tool definitions through the application execu
   assert.ok(definitions.every((tool) => tool.function.parameters.additionalProperties === false));
 });
 
-test('delegates execution with the original abort signal and error code', async () => {
+test('delegates execution with a child abort signal and preserves the error code', async () => {
   const controller = new AbortController();
   let receivedSignal: AbortSignal | undefined;
   const executor = createToolRegistryExecutor({
@@ -30,7 +30,8 @@ test('delegates execution with the original abort signal and error code', async 
     { signal: controller.signal }
   );
 
-  assert.equal(receivedSignal, controller.signal);
+  assert.ok(receivedSignal);
+  assert.notStrictEqual(receivedSignal, controller.signal);
   assert.deepEqual(result, {
     ok: false,
     name: 'search_news',

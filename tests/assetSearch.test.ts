@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createMarketSearchHandler } from '../server/legacy/market-search.handler.js';
+import { MarketController } from '../server/api/market/market.controller.js';
+import { MarketSearchService } from '../server/application/market/market-search.service.js';
+import type { AppLoggerService } from '../server/infrastructure/logging/app-logger.service.js';
 import {
   buildEastmoneySuggestUrl,
   buildTencentSuggestUrl,
@@ -13,6 +15,8 @@ import {
   resolveChineseAssetNameWithStatus
 } from '../server/market/search.js';
 import { searchAssets } from '../src/lib/market.js';
+
+const logger = { info() {}, error() {} } as unknown as AppLoggerService;
 
 test('asset search resolves local Chinese and English aliases without a provider request', async () => {
   const search = createAssetSearch({
@@ -475,13 +479,14 @@ test('financial search renders remote results and selection sets the active rese
   assert.match(source, /onKeyDown=\{handleAssetSearchKeyDown\}/);
 });
 
-test('market search endpoint forwards client cancellation and returns an explicit cancelled response', async () => {
+test('market search controller forwards client cancellation without writing a response', async () => {
   let receivedSignal: AbortSignal | undefined;
-  const handler = createMarketSearchHandler(async (_query, { signal }) => {
+  const service = new MarketSearchService(async (_query, { signal }) => {
     receivedSignal = signal;
     return new Promise((resolve) => signal?.addEventListener('abort', () => resolve({ ok: false, errorCode: 'request_aborted' }), { once: true }));
   });
-  const req = Object.assign(new EventEmitter(), { query: { q: 'Apple' } });
+  const controller = new MarketController(service, logger);
+  const req = new EventEmitter();
   const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
     body: undefined as unknown,
@@ -489,12 +494,11 @@ test('market search endpoint forwards client cancellation and returns an explici
     json(body: unknown) { res.body = body; return res; }
   });
 
-  const pending = handler(req, res);
+  const pending = controller.search('Apple', req as never, res as never);
   req.emit('aborted');
   await pending;
 
   assert.ok(receivedSignal);
   assert.equal(receivedSignal.aborted, true);
-  assert.equal(res.statusCode, 499);
-  assert.deepEqual(res.body, { errorCode: 'request_aborted' });
+  assert.equal(res.body, undefined);
 });

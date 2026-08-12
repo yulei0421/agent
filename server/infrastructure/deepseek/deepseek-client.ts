@@ -54,6 +54,7 @@ export class DeepSeekClient implements ModelClient {
     const pending: DeepSeekSseEvent[] = [];
     const parser = createDeepSeekSseParser((event) => pending.push(event));
     const decoder = new TextDecoder();
+    let done = false;
     try {
       for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
         if (signal.aborted) throw new AppError('request_aborted');
@@ -63,15 +64,25 @@ export class DeepSeekClient implements ModelClient {
           if (event) {
             if (signal.aborted) throw new AppError('request_aborted');
             yield event;
+            if (event.type === 'done') {
+              done = true;
+              pending.length = 0;
+              break;
+            }
           }
         }
+        if (done) break;
       }
-      parser.flush();
+      if (!done) parser.flush();
       while (pending.length > 0) {
         const event = pending.shift();
         if (event) {
           if (signal.aborted) throw new AppError('request_aborted');
           yield event;
+          if (event.type === 'done') {
+            pending.length = 0;
+            break;
+          }
         }
       }
     } catch (error) {

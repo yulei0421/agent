@@ -23,6 +23,13 @@ test('the old executable Express entrypoint has been removed', async () => {
   await assert.rejects(access(new URL('../server/index.ts', import.meta.url)));
 });
 
+test('legacy DeepSeek and market-search entrypoints have been removed', async () => {
+  await Promise.all([
+    assert.rejects(access(new URL('../server/legacy/deepseek.ts', import.meta.url))),
+    assert.rejects(access(new URL('../server/legacy/market-search.handler.ts', import.meta.url)))
+  ]);
+});
+
 test('application services do not depend on HTTP or Nest framework types', async () => {
   const [chatService, marketService] = await Promise.all([
     source('server/application/chat/chat.service.ts'),

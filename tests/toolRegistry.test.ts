@@ -2,16 +2,33 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createToolRegistry } from '../server/tools/registry.js';
 
-test('publishes the four model tools with closed object schemas in a stable order', () => {
-  const definitions = createToolRegistry().definitions();
+test('publishes the four deploy-time manifests with closed schemas in a stable order', () => {
+  const registry = createToolRegistry();
+  const manifests = registry.manifests();
+  const definitions = registry.definitions();
 
-  assert.deepEqual(definitions.map((tool) => tool.function.name), [
+  assert.deepEqual(manifests.map((manifest) => manifest.name), [
     'get_weather',
     'search_news',
     'search_asset',
     'get_quote'
   ]);
-  for (const tool of definitions) {
+  assert.deepEqual(definitions.map((tool) => tool.function.name), manifests.map((manifest) => manifest.name));
+  for (const [index, manifest] of manifests.entries()) {
+    const tool = definitions[index];
+    assert.ok(tool);
+    assert.strictEqual(tool, manifest.definition);
+    assert.equal(manifest.version, '1.0.0');
+    assert.equal(manifest.riskLevel, 'read_only');
+    assert.equal(typeof manifest.execute, 'function');
+    assert.equal(Number.isFinite(manifest.timeoutMs), true);
+    assert.ok(manifest.timeoutMs > 0);
+    assert.equal(Object.isFrozen(manifest), true);
+    assert.equal(Object.isFrozen(manifest.definition), true);
+    assert.equal(Object.isFrozen(manifest.definition.function), true);
+    assert.equal(Object.isFrozen(manifest.definition.function.parameters), true);
+    assert.equal(Object.isFrozen(manifest.definition.function.parameters.properties), true);
+    assert.equal(Object.values(manifest.definition.function.parameters.properties).every(Object.isFrozen), true);
     assert.equal(tool.type, 'function');
     assert.equal(typeof tool.function.description, 'string');
     assert.ok(tool.function.description.length > 0);
@@ -28,6 +45,63 @@ test('publishes the four model tools with closed object schemas in a stable orde
     ['query'],
     ['symbol']
   ]);
+});
+
+test('returns the timeout error when a manifest executor does not settle', async () => {
+  let childSignal: AbortSignal | undefined;
+  let timeoutCallback: (() => void) | undefined;
+  const registry = createToolRegistry({
+    timeoutScheduler: {
+      setTimeout(callback) {
+        timeoutCallback = callback;
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout() {}
+    },
+    webSearch: async (_query, options) => {
+      childSignal = options.signal;
+      return new Promise(() => {});
+    }
+  });
+
+  const result = registry.execute({ name: 'search_news', arguments: '{"query":"市场"}' });
+  assert.ok(childSignal);
+  timeoutCallback?.();
+  assert.deepEqual(await result, {
+    ok: false,
+    name: 'search_news',
+    errorCode: 'tool_execution_timeout'
+  });
+});
+
+test('prioritizes parent cancellation over a manifest timeout and passes a child signal to the executor', async () => {
+  const parent = new AbortController();
+  let childSignal: AbortSignal | undefined;
+  const registry = createToolRegistry({
+    timeoutScheduler: {
+      setTimeout() {
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimeout() {}
+    },
+    webSearch: async (_query, options) => {
+      childSignal = options.signal;
+      parent.abort();
+      return new Promise(() => {});
+    }
+  });
+
+  assert.deepEqual(await registry.execute(
+    { name: 'search_news', arguments: '{"query":"市场"}' },
+    { signal: parent.signal }
+  ), {
+    ok: false,
+    name: 'search_news',
+    errorCode: 'request_aborted'
+  });
+  assert.ok(childSignal);
+  assert.notStrictEqual(childSignal, parent.signal);
+  assert.equal(childSignal.aborted, true);
 });
 
 test('short-circuits pre-aborted execution without invoking a tool adapter', async () => {
@@ -49,7 +123,7 @@ test('short-circuits pre-aborted execution without invoking a tool adapter', asy
   assert.equal(calls, 0);
 });
 
-test('forwards the client abort signal to every registry adapter', async () => {
+test('forwards a child abort signal to every registry adapter', async () => {
   const controller = new AbortController();
   const signals: (AbortSignal | undefined)[] = [];
   const registry = createToolRegistry({
@@ -64,7 +138,12 @@ test('forwards the client abort signal to every registry adapter', async () => {
   await registry.execute({ name: 'search_asset', arguments: '{"query":"资产"}' }, { signal: controller.signal });
   await registry.execute({ name: 'get_quote', arguments: '{"symbol":"AAPL"}' }, { signal: controller.signal });
 
-  assert.deepEqual(signals, [controller.signal, controller.signal, controller.signal, controller.signal]);
+  assert.equal(signals.length, 4);
+  for (const signal of signals) {
+    assert.ok(signal);
+    assert.notStrictEqual(signal, controller.signal);
+    assert.equal(signal.aborted, false);
+  }
 });
 
 test('uses one field contract for published schemas and execution validation', async () => {
@@ -123,11 +202,15 @@ test('executes weather with contextual IP and clock while returning safe weather
     { ip: '203.0.113.10', now: contextNow }
   );
 
-  assert.deepEqual(calls, [{
+  assert.equal(calls.length, 1);
+  const weatherCall = calls[0] as { ip: string; content: string; now: () => Date; signal?: AbortSignal };
+  assert.deepEqual(weatherCall, {
     ip: '203.0.113.10',
     content: '上海天气',
-    now: contextNow
-  }]);
+    now: contextNow,
+    signal: weatherCall.signal
+  });
+  assert.notStrictEqual(weatherCall.signal, undefined);
   assert.deepEqual(result, {
     ok: true,
     name: 'get_weather',

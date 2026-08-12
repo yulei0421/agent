@@ -22,13 +22,26 @@ export interface ToolDefinition {
     parameters: {
       type: 'object';
       properties: Record<string, { type: 'string'; maxLength: number }>;
-      required?: string[];
+      required?: readonly string[];
       additionalProperties: false;
     };
   };
 }
 
+export interface ToolManifest {
+  name: string;
+  version: string;
+  riskLevel: 'read_only';
+  timeoutMs: number;
+  definition: ToolDefinition;
+  execute: (call: ToolCall, context: ToolExecutionContext) => Promise<ToolExecutionResult>;
+}
+
 export interface ToolExecutor {
   definitions(): readonly ToolDefinition[];
   execute(call: ToolCall, context?: ToolExecutionContext): Promise<ToolExecutionResult>;
+}
+
+export interface ToolManifestRegistry extends ToolExecutor {
+  manifests(): readonly ToolManifest[];
 }
