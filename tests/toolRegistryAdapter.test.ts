@@ -10,7 +10,9 @@ test('exposes the manifest tool definitions through the application executor con
     'get_weather',
     'search_news',
     'search_asset',
-    'get_quote'
+    'get_quote',
+    'get_technical_indicators',
+    'get_economic_calendar'
   ]);
   assert.ok(definitions.every((tool) => tool.function.parameters.additionalProperties === false));
 });

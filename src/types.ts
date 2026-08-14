@@ -1,4 +1,5 @@
 import type { StreamEvent } from './lib/chat.js';
+import type { ResearchReport } from './lib/research-report.js';
 
 export type FinancialTab = 'markets' | 'events' | 'trader' | 'watchlist' | 'alerts';
 export type MessageStatus = 'done' | 'streaming' | 'queued' | 'stopped' | 'error';
@@ -26,6 +27,7 @@ export interface ChatRecord {
   createdAt: string;
   updatedAt: string;
   toolEvents?: ToolEvent[];
+  researchReport?: ResearchReport;
   queuedAt?: string;
 }
 

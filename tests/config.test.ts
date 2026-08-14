@@ -32,6 +32,12 @@ test('normalizes valid server configuration', () => {
   });
 });
 
+test('accepts only a safe absolute PDF CJK font path', () => {
+  assert.equal(parseAppConfig({ PDF_CJK_FONT_PATH: '/usr/share/fonts/NotoSansCJK-Regular.ttc' }).pdfFontPath, '/usr/share/fonts/NotoSansCJK-Regular.ttc');
+  assert.throws(() => parseAppConfig({ PDF_CJK_FONT_PATH: 'relative/font.ttf' }));
+  assert.throws(() => parseAppConfig({ PDF_CJK_FONT_PATH: '/font\nnext.ttf' }));
+});
+
 test('validates model resilience configuration boundaries', () => {
   assert.deepEqual(parseAppConfig({
     MODEL_TOTAL_TIMEOUT_MS: '100',

@@ -1,11 +1,12 @@
 import { isIP } from 'node:net';
 import type { ToolCall, ToolDefinition, ToolExecutionContext, ToolExecutionResult } from '../domain/tools/tool.types.js';
 import type { ToolManifest, ToolManifestRegistry } from '../domain/tools/tool.types.js';
+import type { EconomicCalendarResult } from '../economic-calendar/gateway.js';
 
 const OMIT = Symbol('omit');
 type OmitValue = typeof OMIT;
 type UnknownRecord = Record<string, unknown>;
-type ToolName = 'get_weather' | 'search_news' | 'search_asset' | 'get_quote';
+type ToolName = 'get_weather' | 'search_news' | 'search_asset' | 'get_quote' | 'get_technical_indicators' | 'get_economic_calendar';
 type Normalizer = (value: unknown) => unknown | OmitValue;
 
 interface LiveContextInput {
@@ -20,8 +21,10 @@ export interface RegistryDependencies {
   webSearch?: (query: string, options: { now: Date; signal?: AbortSignal }) => Promise<UnknownRecord | undefined>;
   assetSearch?: (query: string, options: { signal?: AbortSignal }) => Promise<unknown>;
   marketGateway?: {
-    getQuote(symbol: string, options: { signal?: AbortSignal }): Promise<UnknownRecord | undefined>;
+    getQuote?(symbol: string, options: { signal?: AbortSignal }): Promise<UnknownRecord | undefined>;
+    getCandles?(symbol: string, options: { interval?: string; range?: string; signal?: AbortSignal }): Promise<UnknownRecord | undefined>;
   };
+  economicCalendar?: (options: { signal?: AbortSignal }) => Promise<EconomicCalendarResult>;
   now?: () => Date;
   timeoutScheduler?: TimeoutScheduler;
 }
@@ -269,7 +272,7 @@ async function executeAssetSearch(call: ToolCall, context: ToolExecutionContext,
 
 async function executeQuote(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
   const { marketGateway } = dependencies;
-  if (!marketGateway) return failure('get_quote', 'tool_unavailable');
+  if (!marketGateway?.getQuote) return failure('get_quote', 'tool_unavailable');
   try {
     const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
     const response = await marketGateway.getQuote(argumentsValue.symbol ?? '', { signal: context.signal });
@@ -281,6 +284,95 @@ async function executeQuote(call: ToolCall, context: ToolExecutionContext, depen
     } };
   } catch (caught) {
     return isAborted(context.signal) ? failure('get_quote', 'request_aborted') : failure('get_quote', safeErrorCode(errorCode(caught), 'provider_unavailable'));
+  }
+}
+
+type Candle = { time: string; close: number };
+
+function candles(value: unknown): Candle[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isObject(item)) return [];
+    const time = isoTimestamp(item.time);
+    const close = boundedNumber(item.close, 0, 1_000_000_000_000);
+    return time === OMIT || close === OMIT ? [] : [{ time, close }];
+  });
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function calculateIndicators(candleData: Candle[]): { close: number; sma14: number; rsi14: number; asOf: string } | undefined {
+  if (candleData.length < 15) return undefined;
+  const sample = candleData.slice(-15);
+  const closes = sample.map((candle) => candle.close);
+  const changes = closes.slice(1).map((close, index) => close - (closes[index] ?? close));
+  const averageGain = changes.reduce((total, change) => total + Math.max(change, 0), 0) / changes.length;
+  const averageLoss = changes.reduce((total, change) => total + Math.max(-change, 0), 0) / changes.length;
+  const rsi14 = averageLoss === 0 ? 100 : 100 - (100 / (1 + averageGain / averageLoss));
+  const last = sample.at(-1);
+  if (!last || !Number.isFinite(rsi14)) return undefined;
+  return {
+    close: roundMetric(last.close),
+    sma14: roundMetric(closes.slice(-14).reduce((total, close) => total + close, 0) / 14),
+    rsi14: roundMetric(rsi14),
+    asOf: last.time
+  };
+}
+
+async function executeTechnicalIndicators(call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  const { marketGateway } = dependencies;
+  if (!marketGateway?.getCandles) return failure('get_technical_indicators', 'tool_unavailable');
+  try {
+    const argumentsValue = JSON.parse(call.arguments) as Record<string, string>;
+    const response = await marketGateway.getCandles(argumentsValue.symbol ?? '', { interval: '1d', range: '1mo', signal: context.signal });
+    if (isAborted(context.signal)) return failure('get_technical_indicators', 'request_aborted');
+    if (!response?.ok) return failure('get_technical_indicators', safeErrorCode(isObject(response?.error) ? response.error.code : undefined, 'provider_unavailable'));
+    const indicatorData = calculateIndicators(candles(response.data));
+    if (!indicatorData) return failure('get_technical_indicators', 'insufficient_market_data');
+    return {
+      ok: true,
+      name: 'get_technical_indicators',
+      result: {
+        data: indicatorData,
+        meta: {
+          ...normalizeFields(response.meta, { source: (value) => stableId(value, 128), symbol: (value) => stableId(value, 64), cached: strictBoolean }),
+          interval: '1d',
+          range: '1mo',
+          points: candles(response.data).length
+        }
+      }
+    };
+  } catch (caught) {
+    return isAborted(context.signal) ? failure('get_technical_indicators', 'request_aborted') : failure('get_technical_indicators', safeErrorCode(errorCode(caught), 'provider_unavailable'));
+  }
+}
+
+function normalizeEconomicCalendar(result: Extract<EconomicCalendarResult, { ok: true }>): UnknownRecord {
+  return {
+    events: result.events.map((event) => normalizeFields(event, {
+      time: isoTimestamp,
+      country: (value) => stableId(value, 8),
+      title: (value) => text(value, 200),
+      impact: (value) => stableId(value, 16),
+      actual: (value) => text(value, 80),
+      forecast: (value) => text(value, 80),
+      previous: (value) => text(value, 80)
+    })),
+    meta: normalizeFields(result, { source: (value) => stableId(value, 64), fetchedAt: isoTimestamp })
+  };
+}
+
+async function executeEconomicCalendar(_call: ToolCall, context: ToolExecutionContext, dependencies: RegistryDependencies): Promise<ToolExecutionResult> {
+  if (!dependencies.economicCalendar) return failure('get_economic_calendar', 'tool_unavailable');
+  try {
+    const response = await dependencies.economicCalendar({ signal: context.signal });
+    if (isAborted(context.signal)) return failure('get_economic_calendar', 'request_aborted');
+    if (!response.ok) return failure('get_economic_calendar', response.errorCode);
+    return { ok: true, name: 'get_economic_calendar', result: normalizeEconomicCalendar(response) };
+  } catch (caught) {
+    return isAborted(context.signal) ? failure('get_economic_calendar', 'request_aborted') : failure('get_economic_calendar', safeErrorCode(errorCode(caught), 'calendar_unavailable'));
   }
 }
 
@@ -302,7 +394,9 @@ function manifestsFor(dependencies: RegistryDependencies): readonly ToolManifest
     manifest('get_weather', definition('get_weather', '查询指定城市或当前用户所在地的实时天气。', { city: { type: 'string', maxLength: 64 } }), executeWeather, dependencies),
     manifest('search_news', definition('search_news', '检索与查询主题相关的近期新闻和报道。', { query: { type: 'string', maxLength: 120 } }, ['query']), executeNews, dependencies),
     manifest('search_asset', definition('search_asset', '根据名称或代码查找可查询行情的金融资产。', { query: { type: 'string', maxLength: 64 } }, ['query']), executeAssetSearch, dependencies),
-    manifest('get_quote', definition('get_quote', '查询已确认市场代码的最新报价和数据时间。', { symbol: { type: 'string', maxLength: 32 } }, ['symbol']), executeQuote, dependencies)
+    manifest('get_quote', definition('get_quote', '查询已确认市场代码的最新报价和数据时间。', { symbol: { type: 'string', maxLength: 32 } }, ['symbol']), executeQuote, dependencies),
+    manifest('get_technical_indicators', definition('get_technical_indicators', '基于固定的日线窗口计算 SMA14 和 RSI14 技术指标。', { symbol: { type: 'string', maxLength: 32 } }, ['symbol']), executeTechnicalIndicators, dependencies),
+    manifest('get_economic_calendar', definition('get_economic_calendar', '查询本周已公布和即将公布的宏观经济日历。', {}), executeEconomicCalendar, dependencies)
   ]);
 }
 

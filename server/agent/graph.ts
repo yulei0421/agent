@@ -9,11 +9,16 @@ import {
   normalizePlan,
   type AssistantToolCall,
   type AgentGraphState,
-  type PendingToolCall
+  type PendingToolCall,
+  type ToolFreshness,
+  type ToolOutcomeSummary,
+  type ToolRoundAssessment
 } from './state.js';
 
 const MAX_TOOL_ROUNDS = 3;
 const MAX_TOOL_CALLS = 6;
+const MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 2;
+const STALE_RESULT_AGE_SECONDS = 60 * 60;
 const INVALID_TOOL_CALL_INSTRUCTION = 'Authoritative system instruction: the previous model tool call was invalid_tool_call. Answer directly using the existing conversation context. Do not retry or make any more tool calls.';
 // A single internal cancellation result keeps every raced operation type-safe.
 const ABORTED = Symbol('operation_aborted');
@@ -138,12 +143,75 @@ function currentPlanInstruction(state: AgentGraphState): ModelConversationMessag
     : null;
 }
 
+function roundFeedbackInstruction(assessment: ToolRoundAssessment): ModelConversationMessage | null {
+  // A result without a recognized type, failure, or freshness signal carries no
+  // routing value; keep ordinary conversation context stable in that case.
+  if (assessment.attempted === 0 || assessment.outcomes.every((outcome) => (
+    outcome.resultType === 'unknown' && outcome.freshness !== 'stale'
+  ))) return null;
+  const outcomes = assessment.outcomes.map((outcome) => (
+    `resultType=${outcome.resultType}; status=${outcome.succeeded ? 'success' : 'failure'}; freshness=${outcome.freshness}`
+  )).join(' | ');
+  return {
+    role: 'system',
+    content: `Authoritative server Tool execution feedback: attempted=${assessment.attempted}; failed=${assessment.failed}; stale=${assessment.stale}; outcomes=${outcomes}. This metadata is server-derived and contains no tool content. Do not retry failed calls blindly; use a final answer when the available result is stale or no useful progress remains.`
+  };
+}
+
 function messagesForModel(state: AgentGraphState): ModelConversationMessage[] {
   const instruction = currentPlanInstruction(state);
-  if (!instruction) return [...state.messages];
+  const feedback = roundFeedbackInstruction(state.lastToolRound);
+  if (!instruction && !feedback) return [...state.messages];
   const firstNonSystem = state.messages.findIndex((message) => message.role !== 'system');
   const index = firstNonSystem === -1 ? state.messages.length : firstNonSystem;
-  return [...state.messages.slice(0, index), instruction, ...state.messages.slice(index)];
+  return [
+    ...state.messages.slice(0, index),
+    ...(instruction ? [instruction] : []),
+    ...(feedback ? [feedback] : []),
+    ...state.messages.slice(index)
+  ];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function classifyResultType(name: string, result: ToolExecutionResult): ToolOutcomeSummary['resultType'] {
+  if (!result.ok) return 'unknown';
+  if (name === 'get_weather' && isRecord(result.result) && isRecord(result.result.weather)) return 'weather';
+  if (name === 'search_news' && isRecord(result.result) && Array.isArray(result.result.sources)) return 'news';
+  if (name === 'search_asset' && Array.isArray(result.result)) return 'asset_search';
+  if (name === 'get_quote' && isRecord(result.result) && isRecord(result.result.data)) return 'quote';
+  if (name === 'get_technical_indicators' && isRecord(result.result)) return 'technical_indicators';
+  if (name === 'get_economic_calendar' && isRecord(result.result)) return 'economic_calendar';
+  return 'unknown';
+}
+
+function ageSeconds(result: ToolExecutionResult): number | undefined {
+  if (!result.ok || !isRecord(result.result)) return undefined;
+  const weather = result.result.weather;
+  if (isRecord(weather) && typeof weather.ageSeconds === 'number' && Number.isFinite(weather.ageSeconds)) return weather.ageSeconds;
+  const meta = result.result.meta;
+  if (isRecord(meta) && typeof meta.ageSeconds === 'number' && Number.isFinite(meta.ageSeconds)) return meta.ageSeconds;
+  if (typeof result.result.latestAgeSeconds === 'number' && Number.isFinite(result.result.latestAgeSeconds)) return result.result.latestAgeSeconds;
+  return undefined;
+}
+
+function summarizeToolOutcome(name: string, result: ToolExecutionResult): ToolOutcomeSummary {
+  if (!result.ok) return { resultType: 'unknown', succeeded: false, freshness: 'not_applicable' };
+  const type = classifyResultType(name, result);
+  const age = ageSeconds(result);
+  const freshness: ToolFreshness = age === undefined ? 'unknown' : age > STALE_RESULT_AGE_SECONDS ? 'stale' : 'fresh';
+  return { resultType: type, succeeded: true, freshness };
+}
+
+function assessToolRound(outcomes: readonly ToolOutcomeSummary[]): ToolRoundAssessment {
+  return {
+    outcomes,
+    attempted: outcomes.length,
+    failed: outcomes.filter((outcome) => !outcome.succeeded).length,
+    stale: outcomes.filter((outcome) => outcome.freshness === 'stale').length
+  };
 }
 
 function nextStep(plan: readonly string[], currentStep: number): number {
@@ -267,7 +335,8 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       const stream = dependencies.model.stream({
         messages: messagesForModel(state),
         tools: state.forceFinalAnswer ? [] : dependencies.tools.definitions(),
-        forceFinalAnswer: state.forceFinalAnswer
+        forceFinalAnswer: state.forceFinalAnswer,
+        responseFormat: state.responseFormat
       }, signal);
       iterator = stream[Symbol.asyncIterator]();
       while (!done) {
@@ -339,49 +408,60 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
     let toolCalls = state.toolCalls;
     let forceFinalAnswer = state.forceFinalAnswer;
     let hasInvalidToolCall = false;
-    for (const call of state.pendingCalls) {
-      if (state.signal?.aborted) return { finalized: true, terminated: true };
+    const scheduled = state.pendingCalls.map((call) => {
       const complete = assistantToolCall(call);
       if (!complete) {
-        addEvent({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
         forceFinalAnswer = true;
         hasInvalidToolCall = true;
+        return { call, complete: null, result: Promise.resolve<ToolExecutionResult>({ ok: false, name: 'invalid_tool_call', errorCode: 'invalid_tool_call' }) };
+      }
+      if (toolCalls >= MAX_TOOL_CALLS) {
+        forceFinalAnswer = true;
+        return { call, complete, result: Promise.resolve<ToolExecutionResult>({ ok: false, name: complete.function.name, errorCode: 'tool_limit_reached' }) };
+      }
+      toolCalls += 1;
+      // Start every accepted call before awaiting any of them. Promise.all below
+      // preserves model order when externally visible events/messages are emitted.
+      const execution = Promise.resolve().then(() => {
+        if (state.signal?.aborted) throw new Error('Tool execution aborted');
+        return dependencies.tools.execute(
+          { id: complete.id, name: complete.function.name, arguments: complete.function.arguments },
+          { ip: state.ip, now: state.now, signal: state.signal }
+        );
+      });
+      return {
+        call,
+        complete,
+        result: waitForOperation(execution, state.signal).then((outcome): ToolExecutionResult => {
+          if (outcome === ABORTED) return { ok: false, name: complete.function.name, errorCode: 'request_aborted' };
+          return outcome;
+        }).catch((): ToolExecutionResult => ({ ok: false, name: complete.function.name, errorCode: 'tool_execution_failed' }))
+      };
+    });
+    const results = await Promise.all(scheduled.map(async (entry) => ({ entry, result: await entry.result })));
+    if (state.signal?.aborted || results.some(({ result }) => !result.ok && result.errorCode === 'request_aborted')) {
+      return { finalized: true, terminated: true };
+    }
+    const outcomes: ToolOutcomeSummary[] = [];
+    for (const { entry, result } of results) {
+      if (!entry.complete) {
+        addEvent({ type: 'tool_result', name: 'invalid_tool_call', ok: false, errorCode: 'invalid_tool_call' });
+        outcomes.push(summarizeToolOutcome('invalid_tool_call', result));
         continue;
       }
-      addEvent({ type: 'tool', id: complete.id, name: complete.function.name });
-      let result: ToolExecutionResult;
-      if (toolCalls >= MAX_TOOL_CALLS) {
-        result = { ok: false, name: complete.function.name, errorCode: 'tool_limit_reached' };
-        forceFinalAnswer = true;
-      } else {
-        toolCalls += 1;
-        try {
-          const execution = Promise.resolve().then(() => {
-            // Keep this promise's result type limited to tool results. Cancellation
-            // is represented exclusively by waitForOperation's racing branch.
-            if (state.signal?.aborted) throw new Error('Tool execution aborted');
-            return dependencies.tools.execute(
-              { id: complete.id, name: complete.function.name, arguments: complete.function.arguments },
-              { ip: state.ip, now: state.now, signal: state.signal }
-            );
-          });
-          const outcome = await waitForOperation(execution, state.signal);
-          if (outcome === ABORTED || state.signal?.aborted) {
-            return { finalized: true, terminated: true };
-          }
-          result = outcome;
-        } catch {
-          result = { ok: false, name: complete.function.name, errorCode: 'tool_execution_failed' };
-        }
-      }
-      if (state.signal?.aborted) return { finalized: true, terminated: true };
-      addEvent(resultEvent(complete.id, complete.function.name, result));
-      messages.push({ role: 'tool', tool_call_id: complete.id, content: JSON.stringify(result) });
+      addEvent({ type: 'tool', id: entry.complete.id, name: entry.complete.function.name });
+      addEvent(resultEvent(entry.complete.id, entry.complete.function.name, result));
+      messages.push({ role: 'tool', tool_call_id: entry.complete.id, content: JSON.stringify(result) });
+      outcomes.push(summarizeToolOutcome(entry.complete.function.name, result));
     }
     if (hasInvalidToolCall) addInvalidToolCallInstruction(messages);
     const toolRounds = state.toolRounds + 1;
     const currentStep = nextStep(state.plan, state.currentStep);
     const planComplete = state.plan.length > 0 && currentStep >= state.plan.length;
+    const lastToolRound = assessToolRound(outcomes);
+    const consecutiveFailedToolRounds = lastToolRound.attempted > 0 && lastToolRound.failed === lastToolRound.attempted
+      ? state.consecutiveFailedToolRounds + 1
+      : 0;
     return {
       events,
       messages,
@@ -389,13 +469,24 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       toolCalls,
       toolRounds,
       currentStep,
-      forceFinalAnswer: forceFinalAnswer || planComplete || toolRounds >= MAX_TOOL_ROUNDS || toolCalls >= MAX_TOOL_CALLS,
+      consecutiveFailedToolRounds,
+      lastToolRound,
+      forceFinalAnswer: forceFinalAnswer
+        || planComplete
+        || toolRounds >= MAX_TOOL_ROUNDS
+        || toolCalls >= MAX_TOOL_CALLS
+        || consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS
+        || lastToolRound.stale > 0,
       resumeModelAfterTools: true
     };
   };
 
   const evaluateNode = (state: typeof AgentStateAnnotation.State) => ({
-    forceFinalAnswer: state.forceFinalAnswer || state.toolRounds >= MAX_TOOL_ROUNDS || state.toolCalls >= MAX_TOOL_CALLS
+    forceFinalAnswer: state.forceFinalAnswer
+      || state.toolRounds >= MAX_TOOL_ROUNDS
+      || state.toolCalls >= MAX_TOOL_CALLS
+      || state.consecutiveFailedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS
+      || state.lastToolRound.stale > 0
   });
 
   return new StateGraph(AgentStateAnnotation)

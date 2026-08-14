@@ -1,5 +1,6 @@
 export type ChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
 export type FinancialContext = { financial: { tab: import('../types.js').FinancialTab; symbol: string } };
+export type ChatResponseFormat = 'text' | 'financial_research';
 export type StreamEvent =
   | { type: 'delta' | 'reasoning'; content: string }
   | { type: 'tool'; id?: string; name: string }
@@ -28,12 +29,13 @@ export async function streamChat(
   messages: readonly ChatMessage[],
   signal: AbortSignal,
   handlers: StreamHandlers,
-  context?: FinancialContext
+  context?: FinancialContext,
+  responseFormat: ChatResponseFormat = 'text'
 ): Promise<void> {
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(context ? { messages, context } : { messages }),
+    body: JSON.stringify({ messages, ...(context ? { context } : {}), ...(responseFormat === 'financial_research' ? { responseFormat } : {}) }),
     signal
   });
 

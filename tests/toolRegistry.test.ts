@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createToolRegistry } from '../server/tools/registry.js';
 
-test('publishes the four deploy-time manifests with closed schemas in a stable order', () => {
+test('publishes the fixed deploy-time manifests with closed schemas in a stable order', () => {
   const registry = createToolRegistry();
   const manifests = registry.manifests();
   const definitions = registry.definitions();
@@ -11,7 +11,9 @@ test('publishes the four deploy-time manifests with closed schemas in a stable o
     'get_weather',
     'search_news',
     'search_asset',
-    'get_quote'
+    'get_quote',
+    'get_technical_indicators',
+    'get_economic_calendar'
   ]);
   assert.deepEqual(definitions.map((tool) => tool.function.name), manifests.map((manifest) => manifest.name));
   for (const [index, manifest] of manifests.entries()) {
@@ -43,8 +45,76 @@ test('publishes the four deploy-time manifests with closed schemas in a stable o
   assert.deepEqual(definitions.slice(1).map((tool) => tool.function.parameters.required), [
     ['query'],
     ['query'],
-    ['symbol']
+    ['symbol'],
+    ['symbol'],
+    undefined
   ]);
+});
+
+test('executes fixed-window technical indicators from market candles and sanitizes provider data', async () => {
+  const calls: unknown[] = [];
+  const registry = createToolRegistry({
+    marketGateway: {
+      async getQuote() { return { ok: true, data: {}, meta: {} }; },
+      async getCandles(symbol, options) {
+        calls.push({ symbol, options });
+        return {
+          ok: true,
+          data: Array.from({ length: 15 }, (_, index) => ({
+            time: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+            close: index + 1,
+            private: 'https://private.example'
+          })),
+          meta: { source: 'yahoo-finance', symbol, cached: false, private: '203.0.113.7' }
+        };
+      }
+    }
+  });
+
+  const result = await registry.execute({ name: 'get_technical_indicators', arguments: '{"symbol":"AAPL.US"}' });
+
+  assert.deepEqual(calls, [{
+    symbol: 'AAPL.US',
+    options: { interval: '1d', range: '1mo', signal: (calls[0] as { options: { signal?: AbortSignal } }).options.signal }
+  }]);
+  assert.deepEqual(result, {
+    ok: true,
+    name: 'get_technical_indicators',
+    result: {
+      data: { close: 15, sma14: 8.5, rsi14: 100, asOf: '2026-07-15T00:00:00.000Z' },
+      meta: { source: 'yahoo-finance', symbol: 'AAPL.US', cached: false, interval: '1d', range: '1mo', points: 15 }
+    }
+  });
+});
+
+test('returns a sanitized fixed-source economic calendar and propagates cancellation', async () => {
+  let childSignal: AbortSignal | undefined;
+  const registry = createToolRegistry({
+    now: () => new Date('2026-07-20T00:00:00.000Z'),
+    economicCalendar: async (options) => {
+      childSignal = options.signal;
+      return {
+        ok: true,
+        source: 'forexfactory',
+        fetchedAt: '2026-07-20T00:00:00.000Z',
+        events: [{
+          time: '2026-07-20T12:30:00.000Z', country: 'US', title: 'CPI', impact: 'high', actual: 'https://private.example', forecast: '2.5%', previous: '2.4%'
+        }]
+      };
+    }
+  });
+
+  const result = await registry.execute({ name: 'get_economic_calendar', arguments: '{}' });
+
+  assert.ok(childSignal);
+  assert.deepEqual(result, {
+    ok: true,
+    name: 'get_economic_calendar',
+    result: {
+      events: [{ time: '2026-07-20T12:30:00.000Z', country: 'US', title: 'CPI', impact: 'high', forecast: '2.5%', previous: '2.4%' }],
+      meta: { source: 'forexfactory', fetchedAt: '2026-07-20T00:00:00.000Z' }
+    }
+  });
 });
 
 test('returns the timeout error when a manifest executor does not settle', async () => {
@@ -152,20 +222,38 @@ test('uses one field contract for published schemas and execution validation', a
     liveContext: async () => { calls.push('get_weather'); return { ok: true }; },
     webSearch: async () => { calls.push('search_news'); return { ok: true }; },
     assetSearch: async () => { calls.push('search_asset'); return [{ market: 'cn' }]; },
-    marketGateway: { getQuote: async () => { calls.push('get_quote'); return { ok: true, data: {}, meta: {} }; } }
+    marketGateway: {
+      getQuote: async () => { calls.push('get_quote'); return { ok: true, data: {}, meta: {} }; },
+      getCandles: async () => {
+        calls.push('get_technical_indicators');
+        return {
+          ok: true,
+          data: Array.from({ length: 15 }, (_, index) => ({ time: `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`, close: index + 1 })),
+          meta: {}
+        };
+      }
+    },
+    economicCalendar: async () => {
+      calls.push('get_economic_calendar');
+      return { ok: true, source: 'forexfactory', fetchedAt: '2026-07-20T00:00:00.000Z', events: [] };
+    }
   });
 
   const callsByTool: Record<string, Record<string, string>> = {
     get_weather: {},
     search_news: { query: '新闻' },
     search_asset: { query: '资产' },
-    get_quote: { symbol: 'AAPL' }
+    get_quote: { symbol: 'AAPL' },
+    get_technical_indicators: { symbol: 'AAPL' },
+    get_economic_calendar: {}
   };
   const fieldsByTool: Record<string, string[]> = {
     get_weather: ['city'],
     search_news: ['query'],
     search_asset: ['query'],
-    get_quote: ['symbol']
+    get_quote: ['symbol'],
+    get_technical_indicators: ['symbol'],
+    get_economic_calendar: []
   };
   for (const definition of registry.definitions()) {
     const { name, parameters } = definition.function;
@@ -173,7 +261,7 @@ test('uses one field contract for published schemas and execution validation', a
     const result = await registry.execute({ name, arguments: JSON.stringify(callsByTool[name]) });
     assert.equal(result.ok, true);
   }
-  assert.deepEqual(calls, ['get_weather', 'search_news', 'search_asset', 'get_quote']);
+  assert.deepEqual(calls, ['get_weather', 'search_news', 'search_asset', 'get_quote', 'get_technical_indicators', 'get_economic_calendar']);
 });
 
 test('executes weather with contextual IP and clock while returning safe weather data', async () => {

@@ -9,6 +9,7 @@ export interface AppConfig {
   deepSeekApiKey?: string;
   deepSeekBaseUrl: string;
   deepSeekModel: string;
+  pdfFontPath?: string;
   modelResilience: ModelResilienceConfig;
 }
 
@@ -60,8 +61,15 @@ function readBoundedInteger(value: string | undefined, fallback: number, name: s
   return parsed;
 }
 
+function readAbsoluteFilePath(value: string | undefined, name: string): string | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (!value.startsWith('/') || value.length > 1_024 || /[\u0000\r\n]/u.test(value)) throw new Error(`${name} must be an absolute file path`);
+  return value;
+}
+
 export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const deepSeekApiKey = environment.DEEPSEEK_API_KEY;
+  const pdfFontPath = readAbsoluteFilePath(environment.PDF_CJK_FONT_PATH, 'PDF_CJK_FONT_PATH');
   if (deepSeekApiKey === API_KEY_PLACEHOLDER) throw new Error('DEEPSEEK_API_KEY must not use the placeholder value');
 
   return {
@@ -71,6 +79,7 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ...(deepSeekApiKey ? { deepSeekApiKey } : {}),
     deepSeekBaseUrl: readHttpOrigin(environment.DEEPSEEK_BASE_URL, 'https://api.deepseek.com', 'DEEPSEEK_BASE_URL'),
     deepSeekModel: environment.DEEPSEEK_MODEL || 'deepseek-v4-flash',
+    ...(pdfFontPath ? { pdfFontPath } : {}),
     modelResilience: {
       totalTimeoutMs: readBoundedInteger(environment.MODEL_TOTAL_TIMEOUT_MS, 60000, 'MODEL_TOTAL_TIMEOUT_MS', 100, 120000),
       firstEventTimeoutMs: readBoundedInteger(environment.MODEL_FIRST_EVENT_TIMEOUT_MS, 15000, 'MODEL_FIRST_EVENT_TIMEOUT_MS', 100, 120000),

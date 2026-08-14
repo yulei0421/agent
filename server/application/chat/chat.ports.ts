@@ -9,11 +9,13 @@ export const AGENT_RUNNER = Symbol('AGENT_RUNNER');
 
 export type Planner = (goal: string, signal?: AbortSignal) => Promise<readonly string[]>;
 
+export type JsonObjectResponseFormat = { type: 'json_object' };
+
 export interface ModelRequest {
   messages: readonly unknown[];
   tools: readonly unknown[];
   forceFinalAnswer?: boolean;
-  responseFormat?: { type: 'json_object' };
+  responseFormat?: JsonObjectResponseFormat;
 }
 
 export interface ModelClient {
@@ -34,6 +36,7 @@ export interface AssistantToolCall {
 export interface AgentRunRequest {
   goal: string;
   messages: readonly ModelConversationMessage[];
+  responseFormat?: JsonObjectResponseFormat;
   signal: AbortSignal;
   onEvent?: (event: AgentSseEvent) => void;
   ip: string;

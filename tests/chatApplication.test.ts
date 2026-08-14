@@ -84,6 +84,25 @@ test('builds trusted messages and delegates the run to the agent runner', async 
   ]);
 });
 
+test('passes the JSON-object constraint only for validated financial research requests', async () => {
+  const requests: unknown[] = [];
+  const service = new ChatApplicationService({ runner: { async run(request) { requests.push(request); return [{ type: 'done' }]; } } });
+
+  await service.run({
+    messages: [{ role: 'user', content: 'AAPL 研究' }],
+    context: { financial: { tab: 'markets', symbol: 'AAPL' } },
+    responseFormat: 'financial_research'
+  });
+  await service.run({ messages: [{ role: 'user', content: '普通问题' }], responseFormat: 'financial_research' });
+
+  const researchMessages = (requests[0] as { messages: readonly { role: string; content?: string }[] }).messages;
+  assert.equal(researchMessages.some((message) => message.content?.includes('Authoritative server output contract')), true);
+  assert.deepEqual((requests[0] as { responseFormat?: unknown }).responseFormat, { type: 'json_object' });
+  const ordinaryMessages = (requests[1] as { messages: readonly { role: string; content?: string }[] }).messages;
+  assert.equal(ordinaryMessages.some((message) => message.content?.includes('Authoritative server output contract')), false);
+  assert.equal((requests[1] as { responseFormat?: unknown }).responseFormat, undefined);
+});
+
 async function completeWithin<T>(operation: Promise<T>, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

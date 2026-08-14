@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LangGraphAgentRunner } from '../server/agent/langgraph-agent-runner.js';
 import { ChatApplicationService } from '../server/application/chat/chat.service.js';
+import { ResearchExportService } from '../server/application/export/research-export.service.js';
 import { AGENT_RUNNER, MODEL_CLIENT, TOOL_EXECUTOR, type AgentRunner } from '../server/application/chat/chat.ports.js';
 import { createApp } from '../server/main.js';
 
@@ -17,6 +18,7 @@ test('Nest composition root provides the chat application through replaceable mo
     assert.ok(app.get(MODEL_CLIENT));
     assert.ok(app.get(TOOL_EXECUTOR));
     assert.ok(app.get(AGENT_RUNNER));
+    assert.ok(app.get(ResearchExportService));
   } finally {
     await app.close();
   }

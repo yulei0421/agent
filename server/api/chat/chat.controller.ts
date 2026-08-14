@@ -34,6 +34,7 @@ export class ChatController {
       await this.chat.run({
         messages: (body as { messages?: unknown } | undefined)?.messages,
         context: (body as { context?: unknown } | undefined)?.context,
+        responseFormat: (body as { responseFormat?: unknown } | undefined)?.responseFormat,
         ip,
         signal: controller.signal,
         onEvent: (event) => writer.write(event)

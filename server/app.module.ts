@@ -1,11 +1,13 @@
 import { Module, type DynamicModule, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ChatController } from './api/chat/chat.controller.js';
+import { ExportController } from './api/export/export.controller.js';
 import { HealthController } from './api/health/health.controller.js';
 import { MetricsController } from './api/health/metrics.controller.js';
 import { MarketController } from './api/market/market.controller.js';
 import { StatusGateway } from './api/status/status.gateway.js';
 import { RequestIdMiddleware } from './api/request-id.middleware.js';
 import { ChatApplicationService } from './application/chat/chat.service.js';
+import { ResearchExportService } from './application/export/research-export.service.js';
 import { AGENT_RUNNER, MODEL_CLIENT, PLANNER, TOOL_EXECUTOR, type AgentRunner, type ModelClient, type Planner } from './application/chat/chat.ports.js';
 import { LangGraphAgentRunner } from './agent/langgraph-agent-runner.js';
 import { MarketSearchService } from './application/market/market-search.service.js';
@@ -18,7 +20,10 @@ import { ResilientModelClient } from './infrastructure/deepseek/resilient-model-
 import { UnavailableModelClient } from './infrastructure/deepseek/unavailable-model-client.js';
 import { AppLoggerService } from './infrastructure/logging/app-logger.service.js';
 import { RuntimeTelemetry } from './infrastructure/runtime/runtime-telemetry.js';
+import { InstrumentedToolExecutor } from './infrastructure/runtime/instrumented-tool-executor.js';
+import { ResearchDocumentRenderer } from './infrastructure/export/research-document-renderer.js';
 import { createToolRegistryExecutor } from './infrastructure/tools/tool-registry.adapter.js';
+import { createEconomicCalendarGateway } from './economic-calendar/gateway.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
 import { resolveLiveContext } from './tools/live.js';
@@ -36,7 +41,7 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: [AppConfigModule.forRoot(environment)],
-      controllers: [HealthController, MetricsController, MarketController, ChatController],
+      controllers: [HealthController, MetricsController, MarketController, ChatController, ExportController],
       providers: [
         AppLoggerService,
         StatusGateway,
@@ -69,13 +74,17 @@ export class AppModule implements NestModule {
         },
         {
           provide: TOOL_EXECUTOR,
-          inject: [ASSET_SEARCH],
-          useFactory: (assetSearch: ReturnType<typeof createAssetSearch>): ToolExecutor => createToolRegistryExecutor({
-            assetSearch,
-            liveContext: resolveLiveContext,
-            marketGateway: createMarketGateway(),
-            webSearch: searchWeb
-          })
+          inject: [ASSET_SEARCH, RuntimeTelemetry],
+          useFactory: (assetSearch: ReturnType<typeof createAssetSearch>, telemetry: RuntimeTelemetry): ToolExecutor => new InstrumentedToolExecutor(
+            createToolRegistryExecutor({
+              assetSearch,
+              economicCalendar: createEconomicCalendarGateway().getWeek,
+              liveContext: resolveLiveContext,
+              marketGateway: createMarketGateway(),
+              webSearch: searchWeb
+            }),
+            telemetry
+          )
         },
         {
           provide: AGENT_RUNNER,
@@ -86,6 +95,11 @@ export class AppModule implements NestModule {
           provide: ChatApplicationService,
           inject: [AGENT_RUNNER],
           useFactory: (runner: AgentRunner) => new ChatApplicationService({ runner })
+        },
+        {
+          provide: ResearchExportService,
+          inject: [AppConfigService],
+          useFactory: (config: AppConfigService) => new ResearchExportService(new ResearchDocumentRenderer({ fontPath: config.value.pdfFontPath }))
         }
       ]
     };

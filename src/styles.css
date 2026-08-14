@@ -154,6 +154,24 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .tool-events li { color: var(--muted); }
 .live-context, .live-weather, .web-search-sources { padding: 8px 0; }
 .freshness-meta, .live-context span, .live-weather span { color: var(--subtle); font-size: var(--text-meta); }
+.technical-indicators-card, .economic-calendar-card { display: grid; gap: 12px; max-width: 620px; padding: 16px; border: 1px solid #b7d2c9; border-radius: var(--radius-control); background: linear-gradient(135deg, #f7fbf7, var(--surface-raised)); color: var(--ink); }
+.technical-indicators-card header, .economic-calendar-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.technical-indicators-card header span, .economic-calendar-card header span { color: var(--accent-deep); font-size: var(--text-meta); font-weight: 800; letter-spacing: 0.04em; }
+.technical-indicators-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.technical-indicators-grid div { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, 0.68); }
+.technical-indicators-grid dt { color: var(--subtle); font-size: var(--text-meta); }
+.technical-indicators-grid dd { margin: 4px 0 0; color: var(--accent-deep); font-variant-numeric: tabular-nums; font-weight: 800; overflow-wrap: anywhere; }
+.economic-calendar-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.economic-calendar-list li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+.economic-calendar-list li:first-child { border-top: 0; padding-top: 0; }
+.economic-calendar-list strong, .economic-calendar-list time, .economic-calendar-list p { display: block; }
+.economic-calendar-list strong { color: var(--ink); overflow-wrap: anywhere; }
+.economic-calendar-list time, .economic-calendar-list p, .economic-calendar-empty { margin: 4px 0 0; color: var(--subtle); font-size: var(--text-meta); overflow-wrap: anywhere; }
+.economic-calendar-list p { grid-column: 2; }
+.economic-impact { align-self: start; min-width: 52px; padding: 3px 5px; border-radius: 999px; background: var(--surface-muted); color: var(--muted); font-size: 10px; font-weight: 800; line-height: 1; text-align: center; text-transform: uppercase; }
+.economic-impact.high { background: #fde8e4; color: #a33a2b; }
+.economic-impact.medium { background: #fff4d7; color: #805711; }
+.economic-impact.holiday { background: #e7f1ee; color: var(--accent-deep); }
 
 .composer { display: grid; gap: 12px; width: min(100%, 760px); margin: 0 auto; padding: 14px; border: 1px solid var(--line-strong); border-radius: var(--radius-composer); background: var(--surface-raised); box-shadow: 0 12px 24px rgba(48, 57, 45, 0.08); }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1), 0 12px 24px rgba(48, 57, 45, 0.08); }
@@ -192,6 +210,14 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .financial-chat-entry { min-width: 128px; }
 .financial-canvas-content { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
 .research-asset-selector, .research-query-state, .research-query-brief, .financial-context { padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: 0 6px 18px rgba(48, 57, 45, 0.05); }
+.research-report { margin: 8px 0; padding: 18px; border: 1px solid #adc8ba; border-left: 4px solid var(--accent-deep); border-radius: var(--radius-panel); background: #f4faf5; }
+.research-report h3, .research-report h4 { margin: 0 0 8px; }
+.research-report section { margin-top: 14px; }
+.research-report ul { margin: 0; padding-left: 20px; }
+.research-export-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.research-export-actions button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--accent-deep); border-radius: 999px; background: var(--surface-raised); color: var(--accent-deep); font-size: var(--text-meta); font-weight: 800; }
+.research-export-actions button:disabled { cursor: wait; opacity: 0.62; }
+.research-export-error { color: #a33a2b; font-size: var(--text-meta); }
 .research-asset-selector h2, .research-query-state h2, .research-query-brief h2 { margin: 4px 0 8px; font-size: 18px; letter-spacing: -0.02em; }
 .research-asset-selector p, .research-query-state p, .research-query-brief p, .financial-context p { color: var(--muted); }
 .research-note { margin: 0 0 16px; }
@@ -248,6 +274,13 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 @media (max-width: 420px) {
   .composer-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .composer-actions button { width: 100%; }
+}
+
+@media (max-width: 520px) {
+  .technical-indicators-card, .economic-calendar-card { padding: 12px; }
+  .technical-indicators-grid { grid-template-columns: 1fr; }
+  .economic-calendar-list li { grid-template-columns: 1fr; }
+  .economic-calendar-list p { grid-column: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

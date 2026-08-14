@@ -84,8 +84,21 @@ test('App sends financial mode as bounded request context instead of a client sy
   const source = await readSource('../src/App.tsx');
 
   assert.match(source, /financialMode\s*\?\s*\{\s*financial:\s*\{\s*tab:\s*financialTab,\s*symbol:\s*financialSymbol\s*}\s*}\s*:\s*undefined/);
-  assert.match(source, /streamChat\(payload, controller\.signal,[\s\S]*financialContext\)/);
+  assert.match(source, /streamChat\(payload, controller\.signal,[\s\S]*financialContext, financialMode \? 'financial_research' : 'text'\)/);
   assert.doesNotMatch(source, /role:\s*'system',\s*content:\s*`金融工作台/);
+});
+
+test('financial mode requests a structured report and renders a safe research card', async () => {
+  const [app, item] = await Promise.all([
+    readSource('../src/App.tsx'),
+    readSource('../src/components/MessageItem.tsx')
+  ]);
+
+  assert.match(app, /financialMode \? 'financial_research' : 'text'/);
+  assert.match(app, /parseResearchReport\(assistantText\)/);
+  assert.match(item, /结构化研究结果/);
+  assert.match(item, /research-report/);
+  assert.match(item, /风险提示/);
 });
 
 test('MessageItem renders generic registry events and result-backed tool cards', async () => {
@@ -108,4 +121,26 @@ test('MessageItem renders generic registry events and result-backed tool cards',
   assert.match(source, /Array\.isArray\(result\.sources\)/);
   assert.match(source, /typeof value === 'object'/);
   assert.doesNotMatch(source, /source\.url|href=\{source\.url\}/);
+});
+
+test('MessageItem limits structured market cards to validated successful SSE tool results', async () => {
+  const [item, styles] = await Promise.all([
+    readSource('../src/components/MessageItem.tsx'),
+    readSource('../src/styles.css')
+  ]);
+
+  assert.match(item, /function technicalIndicatorResult\(value: unknown\)/);
+  assert.match(item, /function economicCalendarResult\(value: unknown\)/);
+  assert.match(item, /event\.type === 'tool_result' && event\.ok/);
+  assert.match(item, /event\.name === 'get_technical_indicators' && technicalIndicators/);
+  assert.match(item, /event\.name === 'get_economic_calendar' && economicCalendar/);
+  assert.match(item, /技术指标/);
+  assert.match(item, /经济日历/);
+  assert.match(item, /aria-label="技术指标结果"/);
+  assert.match(item, /aria-label="经济日历结果"/);
+  assert.match(item, /aria-live="polite"/);
+  assert.match(styles, /\.technical-indicators-card, \.economic-calendar-card/);
+  assert.match(styles, /\.technical-indicators-grid/);
+  assert.match(styles, /\.economic-calendar-list/);
+  assert.match(styles, /@media \(max-width: 520px\)[\s\S]*\.technical-indicators-grid/);
 });

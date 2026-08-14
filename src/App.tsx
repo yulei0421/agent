@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { streamChat } from './lib/chat.js';
+import { parseResearchReport } from './lib/research-report.js';
 import { createTypewriter } from './lib/typewriter.js';
 import { searchAssets } from './lib/market.js';
 import { clear, getAll, id, now, put, remove } from './lib/db.js';
@@ -205,10 +206,12 @@ export default function App() {
           typewriter.push(delta);
         },
         onDone() {}
-      }, financialContext);
+      }, financialContext, financialMode ? 'financial_research' : 'text');
       await typewriter.drain();
-      await put('messages', { ...assistantMessage, content: assistantText, status: 'done', toolEvents: assistantToolEvents, updatedAt: now() });
-      setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, status: 'done' } : item)));
+      const researchReport = financialMode ? parseResearchReport(assistantText) : null;
+      const completedContent = researchReport ? researchReport.conclusion : assistantText;
+      await put('messages', { ...assistantMessage, content: completedContent, status: 'done', toolEvents: assistantToolEvents, researchReport: researchReport ?? undefined, updatedAt: now() });
+      setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, content: completedContent, researchReport: researchReport ?? undefined, status: 'done' } : item)));
     } catch (err) {
       typewriter.cancel();
       if (err instanceof Error && err.name === 'AbortError') {

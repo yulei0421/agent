@@ -1,4 +1,5 @@
 import { Annotation } from '@langchain/langgraph';
+import type { JsonObjectResponseFormat } from '../application/chat/chat.ports.js';
 import type { AgentSseEvent } from '../types.js';
 
 export type ModelConversationMessage =
@@ -21,14 +22,35 @@ export interface PendingToolCall {
   order: number;
 }
 
+export type ToolFreshness = 'fresh' | 'stale' | 'unknown' | 'not_applicable';
+
+export interface ToolOutcomeSummary {
+  resultType: 'weather' | 'news' | 'asset_search' | 'quote' | 'technical_indicators' | 'economic_calendar' | 'unknown';
+  succeeded: boolean;
+  freshness: ToolFreshness;
+}
+
+export interface ToolRoundAssessment {
+  readonly outcomes: readonly ToolOutcomeSummary[];
+  readonly attempted: number;
+  readonly failed: number;
+  readonly stale: number;
+}
+
 export const AgentStateAnnotation = Annotation.Root({
   goal: Annotation<string>({ reducer: (_left, right) => right, default: () => '' }),
   plan: Annotation<string[]>({ reducer: (_left, right) => right, default: () => [] }),
   currentStep: Annotation<number>({ reducer: (_left, right) => right, default: () => 0 }),
   messages: Annotation<ModelConversationMessage[]>({ reducer: (_left, right) => right, default: () => [] }),
+  responseFormat: Annotation<JsonObjectResponseFormat | undefined>({ reducer: (_left, right) => right, default: () => undefined }),
   pendingCalls: Annotation<PendingToolCall[]>({ reducer: (_left, right) => right, default: () => [] }),
   toolRounds: Annotation<number>({ reducer: (_left, right) => right, default: () => 0 }),
   toolCalls: Annotation<number>({ reducer: (_left, right) => right, default: () => 0 }),
+  consecutiveFailedToolRounds: Annotation<number>({ reducer: (_left, right) => right, default: () => 0 }),
+  lastToolRound: Annotation<ToolRoundAssessment>({
+    reducer: (_left, right) => right,
+    default: () => ({ outcomes: [], attempted: 0, failed: 0, stale: 0 })
+  }),
   forceFinalAnswer: Annotation<boolean>({ reducer: (_left, right) => right, default: () => false }),
   modelToolsDisabled: Annotation<boolean>({ reducer: (_left, right) => right, default: () => false }),
   resumeModelAfterTools: Annotation<boolean>({ reducer: (_left, right) => right, default: () => false }),
