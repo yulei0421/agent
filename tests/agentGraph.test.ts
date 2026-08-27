@@ -47,6 +47,16 @@ test('LangGraph planning node bounds plan steps and initializes the current step
   assert.deepEqual(state.plan, ['确认比较对象', '获取实时数据', '基于结果总结']);
   assert.equal(state.currentStep, 0);
   assert.equal(state.terminated, false);
+  assert.deepEqual(state.events[0], {
+    type: 'plan',
+    currentStep: 0,
+    completed: false,
+    steps: [
+      { title: '确认比较对象', status: 'in_progress' },
+      { title: '获取实时数据', status: 'pending' },
+      { title: '基于结果总结', status: 'pending' }
+    ]
+  });
 });
 
 test('uses the current plan step only in server-owned model context and advances after a tool round', async () => {
@@ -67,7 +77,12 @@ test('uses the current plan step only in server-owned model context and advances
   assert.equal(systemContents(requests[1]).some((content) => content.includes('查询天气')), false);
   assert.match(systemContents(requests[1]).join('\n'), /根据结果总结/);
   assert.equal(state.currentStep, 1);
-  assert.equal(state.events.some((event) => JSON.stringify(event).includes('查询天气')), false);
+  assert.equal(state.events.filter((event) => event.type !== 'plan').some((event) => JSON.stringify(event).includes('查询天气')), false);
+  const plans = state.events.filter((event): event is Extract<typeof event, { type: 'plan' }> => event.type === 'plan');
+  assert.deepEqual(plans.map((event) => [event.currentStep, event.steps.map((step) => step.status)]), [
+    [0, ['in_progress', 'pending']],
+    [1, ['completed', 'in_progress']]
+  ]);
 });
 
 test('preserves the JSON-object constraint through the final request after tools run', async () => {
@@ -132,7 +147,7 @@ test('keeps two plan steps transient, advances one step per tool round, and forc
   assert.deepEqual(requests[2]?.tools, []);
   assert.equal(thirdMessages.filter((message) => message.role === 'tool').length, 2);
   assert.equal(state.currentStep, 2);
-  assert.equal(['查询天气', '根据结果总结'].every((step) => !JSON.stringify(state.events).includes(step)), true);
+  assert.equal(['查询天气', '根据结果总结'].every((step) => !JSON.stringify(state.events.filter((event) => event.type !== 'plan')).includes(step)), true);
   assert.equal(['查询天气', '根据结果总结'].every((step) => !JSON.stringify(state.messages).includes(step)), true);
 });
 

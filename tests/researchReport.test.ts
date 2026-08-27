@@ -29,3 +29,15 @@ test('rejects malformed, overlong, and prototype-controlled research reports', (
   assert.equal(parseResearchReport(JSON.stringify({ title: 'x'.repeat(121), conclusion: 'y', evidence: [], risks: [] })), null);
   assert.equal(parseResearchReport(Object.assign(Object.create({ title: 'x' }), { conclusion: 'y', evidence: [], risks: [] })), null);
 });
+
+test('accepts evidence only when its source is present in the current citation ledger', () => {
+  const value = JSON.stringify({
+    title: 'AAPL 研究',
+    conclusion: '结论',
+    evidence: [{ claim: '报价已更新', source: 'yahoo-finance' }],
+    risks: []
+  });
+
+  assert.notEqual(parseResearchReport(value, { allowedSources: ['yahoo-finance'] }), null);
+  assert.equal(parseResearchReport(value, { allowedSources: ['news-1'] }), null);
+});

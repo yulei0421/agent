@@ -92,6 +92,7 @@ export class RuntimeTelemetry {
   private readonly httpCounts = newCounters(STATUS_CLASSES);
   private readonly httpDurationMs = newCounters(STATUS_CLASSES);
   private sseDisconnects = 0;
+  private modelFailovers = 0;
   private configured = false;
   private circuit: CircuitStatus = 'closed';
 
@@ -126,6 +127,10 @@ export class RuntimeTelemetry {
 
   recordSseDisconnect(): void {
     this.sseDisconnects += 1;
+  }
+
+  recordModelFailover(): void {
+    this.modelFailovers += 1;
   }
 
   recordHttp(_route: string, status: number, durationMs: number): void {
@@ -171,6 +176,8 @@ export class RuntimeTelemetry {
       ...EXTERNAL_SOURCES.flatMap((source) => SOURCE_STATUSES.map((status) => `agent_external_source_recent_status{source="${source}",status="${status}"} ${this.sourceStatuses[source] === status ? 1 : 0}`)),
       '# TYPE agent_sse_disconnects_total counter',
       `agent_sse_disconnects_total ${this.sseDisconnects}`,
+      '# TYPE agent_model_failover_total counter',
+      `agent_model_failover_total ${this.modelFailovers}`,
       '# TYPE agent_http_requests_total counter',
       ...STATUS_CLASSES.map((outcome) => `agent_http_requests_total{status_class="${outcome}"} ${this.httpCounts[outcome]}`),
       '# TYPE agent_http_duration_milliseconds_total counter',

@@ -1,9 +1,11 @@
 import type { StreamEvent } from './lib/chat.js';
 import type { ResearchReport } from './lib/research-report.js';
+import type { AgentCollaborationEvent, AgentPlanSnapshot } from '../shared/agent-events.js';
 
 export type FinancialTab = 'markets' | 'events' | 'trader' | 'watchlist' | 'alerts';
 export type MessageStatus = 'done' | 'streaming' | 'queued' | 'stopped' | 'error';
 export type ToolEvent = Extract<StreamEvent, { type: 'tool' | 'tool_result' }>;
+export type AgentEvent = AgentCollaborationEvent;
 
 export interface LocalUser {
   id: string;
@@ -27,7 +29,9 @@ export interface ChatRecord {
   createdAt: string;
   updatedAt: string;
   toolEvents?: ToolEvent[];
+  agentEvents?: AgentEvent[];
   researchReport?: ResearchReport;
+  plan?: AgentPlanSnapshot;
   queuedAt?: string;
 }
 

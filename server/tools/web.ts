@@ -34,7 +34,7 @@ function safeNewsUrl(value: string): string | null {
   }
 }
 
-function parseRssItems(xml: string, serverTimeMs: number): { title: string; url: string; publisher: string; publishedAt: string }[] {
+function parseRssItems(xml: string, serverTimeMs: number): { citationId: string; title: string; url: string; publisher: string; publishedAt: string }[] {
   if (typeof xml !== 'string' || !/<rss\b/i.test(xml)) throw new Error('invalid RSS');
 
   const sources = [];
@@ -52,7 +52,7 @@ function parseRssItems(xml: string, serverTimeMs: number): { title: string; url:
   return sources
     .sort((left, right) => right.publishedAtMs - left.publishedAtMs)
     .slice(0, MAX_SOURCES)
-    .map(({ publishedAtMs, ...source }) => source);
+    .map(({ publishedAtMs, ...source }, index) => ({ ...source, citationId: `news-${index + 1}` }));
 }
 
 function isValidQuery(query: unknown): query is string {

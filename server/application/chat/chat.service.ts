@@ -43,7 +43,7 @@ function financialContext(context: unknown): { role: 'system'; content: string }
 
 function researchOutputInstruction(responseFormat: unknown, context: { role: 'system'; content: string } | null): ModelConversationMessage | null {
   if (responseFormat !== 'financial_research' || !context) return null;
-  return { role: 'system', content: 'Authoritative server output contract: after gathering required current data, return one JSON object only: title (string <=120), conclusion (string <=2000), evidence (array <=6 of {claim, source, observedAt?}), risks (array <=6 strings), optional asOf ISO timestamp. Cite only tool-result metadata; do not include URLs, markdown, investment instructions, or extra fields.' };
+  return { role: 'system', content: 'Authoritative server output contract: after gathering required current data, return one JSON object only: title (string <=120), conclusion (string <=2000), evidence (array <=6 of {claim, source, observedAt?}), risks (array <=6 strings), optional asOf ISO timestamp. Each evidence.source must exactly match a safe citationId or provider source present in a successful tool result from this request; never invent a source name. Cite only tool-result metadata; do not include URLs, markdown, investment instructions, or extra fields.' };
 }
 
 function researchResponseFormat(responseFormat: unknown, context: { role: 'system'; content: string } | null): JsonObjectResponseFormat | undefined {
@@ -74,6 +74,7 @@ export class ChatApplicationService {
       goal: [...clientMessages].reverse().find((message) => message.role === 'user')?.content ?? '',
       messages,
       responseFormat,
+      ...(responseFormat ? { collaboration: 'research' as const } : {}),
       signal: request.signal ?? new AbortController().signal,
       onEvent: request.onEvent,
       ip: request.ip ?? '',

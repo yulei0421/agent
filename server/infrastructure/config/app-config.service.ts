@@ -9,6 +9,11 @@ export interface AppConfig {
   deepSeekApiKey?: string;
   deepSeekBaseUrl: string;
   deepSeekModel: string;
+  modelFallback?: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+  };
   pdfFontPath?: string;
   modelResilience: ModelResilienceConfig;
 }
@@ -69,8 +74,16 @@ function readAbsoluteFilePath(value: string | undefined, name: string): string |
 
 export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const deepSeekApiKey = environment.DEEPSEEK_API_KEY;
+  const fallbackApiKey = environment.MODEL_FALLBACK_API_KEY;
+  const fallbackBaseUrl = environment.MODEL_FALLBACK_BASE_URL;
+  const fallbackModel = environment.MODEL_FALLBACK_NAME;
+  const hasFallbackConfiguration = Boolean(fallbackApiKey || fallbackBaseUrl || fallbackModel);
   const pdfFontPath = readAbsoluteFilePath(environment.PDF_CJK_FONT_PATH, 'PDF_CJK_FONT_PATH');
   if (deepSeekApiKey === API_KEY_PLACEHOLDER) throw new Error('DEEPSEEK_API_KEY must not use the placeholder value');
+  if (hasFallbackConfiguration && (!fallbackApiKey || !fallbackBaseUrl || !fallbackModel)) {
+    throw new Error('MODEL_FALLBACK_API_KEY, MODEL_FALLBACK_BASE_URL, and MODEL_FALLBACK_NAME must be configured together');
+  }
+  if (fallbackApiKey === API_KEY_PLACEHOLDER) throw new Error('MODEL_FALLBACK_API_KEY must not use the placeholder value');
 
   return {
     port: readPort(environment.PORT),
@@ -79,6 +92,15 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ...(deepSeekApiKey ? { deepSeekApiKey } : {}),
     deepSeekBaseUrl: readHttpOrigin(environment.DEEPSEEK_BASE_URL, 'https://api.deepseek.com', 'DEEPSEEK_BASE_URL'),
     deepSeekModel: environment.DEEPSEEK_MODEL || 'deepseek-v4-flash',
+    ...(hasFallbackConfiguration
+      ? {
+        modelFallback: {
+          apiKey: fallbackApiKey!,
+          baseUrl: readHttpOrigin(fallbackBaseUrl, '', 'MODEL_FALLBACK_BASE_URL'),
+          model: fallbackModel!
+        }
+      }
+      : {}),
     ...(pdfFontPath ? { pdfFontPath } : {}),
     modelResilience: {
       totalTimeoutMs: readBoundedInteger(environment.MODEL_TOTAL_TIMEOUT_MS, 60000, 'MODEL_TOTAL_TIMEOUT_MS', 100, 120000),

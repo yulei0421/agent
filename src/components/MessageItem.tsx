@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import { useState } from 'react';
 import { downloadResearchReport, type ResearchDocumentFormat } from '../lib/research-export.js';
+import { AgentPlan } from './AgentPlan.js';
 import type { ChatRecord, ToolEvent } from '../types.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -142,9 +143,10 @@ function EconomicCalendarCard({ calendar }: { calendar: EconomicCalendar }) {
   </section>;
 }
 
-export function MessageItem({ message, streaming }: { message: ChatRecord; streaming: boolean }) {
+export function MessageItem({ message, streaming, onRetry }: { message: ChatRecord; streaming: boolean; onRetry?: () => void }) {
   const isStreamingAssistant = streaming && message.role === 'assistant' && message.status === 'streaming';
   const toolEvents = message.role === 'assistant' ? eventRecords(message.toolEvents) : [];
+  const agentEvents = message.role === 'assistant' ? (message.agentEvents ?? []) : [];
 
   return (
     <article className={`message ${message.role}${isStreamingAssistant ? ' streaming' : ''}`}>
@@ -153,6 +155,10 @@ export function MessageItem({ message, streaming }: { message: ChatRecord; strea
         <span>{message.status}</span>
         {isStreamingAssistant && <span className="streaming-label">生成中</span>}
       </div>
+      {message.role === 'assistant' && <AgentPlan plan={message.plan} />}
+      {message.role === 'assistant' && (message.status === 'error' || message.status === 'stopped') && onRetry && (
+        <button className="message-retry" type="button" onClick={onRetry}>重新生成</button>
+      )}
       {message.role === 'assistant' && message.researchReport ? <ResearchReportCard report={message.researchReport} /> : message.role === 'assistant' ? (
         <ReactMarkdown components={{
           a(props) {
@@ -166,6 +172,17 @@ export function MessageItem({ message, streaming }: { message: ChatRecord; strea
         </ReactMarkdown>
       ) : (
         <p>{message.content}</p>
+      )}
+      {agentEvents.length > 0 && (
+        <section className="agent-events" aria-label="协作代理">
+          <h3>协作代理</h3>
+          <ul>{agentEvents.map((event, index) => (
+            <li key={`${event.role}-${event.status}-${index}`}>
+              <span>{event.role === 'researcher' ? '研究员' : event.role === 'risk_reviewer' ? '风险复核员' : event.role}</span>
+              <span>{event.status === 'started' ? '已启动' : event.status === 'completed' ? '已完成' : '已跳过'}</span>
+            </li>
+          ))}</ul>
+        </section>
       )}
       {toolEvents.length > 0 && (
         <section className="tool-events" aria-label="数据来源与工具调用">
@@ -197,7 +214,7 @@ export function MessageItem({ message, streaming }: { message: ChatRecord; strea
                       </p>
                       <ul>{sources.slice(0, 5).map((source, sourceIndex) => (
                         <li key={`${display(source.title, 'source')}-${sourceIndex}`}>
-                          <strong>{display(source.title, '未命名新闻')}</strong>
+                          <strong>{display(source.citationId, `来源 ${sourceIndex + 1}`)} · {display(source.title, '未命名新闻')}</strong>
                           <span>{display(source.publisher, '未知来源')} · <time dateTime={display(source.publishedAt, '')}>{display(source.publishedAt, '未知')}</time></span>
                         </li>
                       ))}</ul>

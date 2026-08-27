@@ -7,33 +7,33 @@ async function source(path: string): Promise<string> {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
-test('downloads only a successful server document response as a Blob attachment', async () => {
+test('clicks a server-owned download link after a successful export request', async () => {
   const originalFetch = globalThis.fetch;
-  const originalUrl = URL.createObjectURL;
-  const originalRevoke = URL.revokeObjectURL;
   const originalDocument = globalThis.document;
   const requests: { url: string; init?: RequestInit }[] = [];
-  const clicked: string[] = [];
+  const clicked: { href?: string; download?: string }[] = [];
   globalThis.fetch = async (url, init) => {
     requests.push({ url: String(url), init });
-    return new Response(Buffer.from('%PDF-report'), { status: 200, headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="financial-research.pdf"' } });
+    return new Response(JSON.stringify({ downloadUrl: '/api/exports/research/download/token_123', filename: 'financial-research.pdf' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
-  URL.createObjectURL = () => 'blob:report';
-  URL.revokeObjectURL = () => undefined;
-  Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => ({ click: () => clicked.push('clicked'), remove: () => undefined }) } });
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => {
+    const link: { href?: string; download?: string; click: () => void; remove: () => void } = {
+      click: () => clicked.push({ href: link.href, download: link.download }),
+      remove: () => undefined
+    };
+    return link;
+  } } });
 
   try {
     await downloadResearchReport({ title: '研究', conclusion: '结论', evidence: [], risks: [] }, 'pdf');
   } finally {
     globalThis.fetch = originalFetch;
-    URL.createObjectURL = originalUrl;
-    URL.revokeObjectURL = originalRevoke;
     Object.defineProperty(globalThis, 'document', { configurable: true, value: originalDocument });
   }
 
-  assert.equal(requests[0]?.url, '/api/exports/research/pdf');
+  assert.equal(requests[0]?.url, '/api/exports/research/pdf/link');
   assert.equal(requests[0]?.init?.method, 'POST');
-  assert.equal(clicked.length, 1);
+  assert.deepEqual(clicked, [{ href: '/api/exports/research/download/token_123', download: 'financial-research.pdf' }]);
 });
 
 test('shows PDF and PPTX export actions only for parsed research reports', async () => {

@@ -15,6 +15,7 @@ import type { ToolExecutor } from './domain/tools/tool.types.js';
 import { AppConfigModule } from './infrastructure/config/app-config.module.js';
 import { AppConfigService, type AppConfig } from './infrastructure/config/app-config.service.js';
 import { DeepSeekClient } from './infrastructure/deepseek/deepseek-client.js';
+import { FailoverModelClient } from './infrastructure/deepseek/failover-model-client.js';
 import { ModelPlanner } from './infrastructure/deepseek/model-planner.js';
 import { ResilientModelClient } from './infrastructure/deepseek/resilient-model-client.js';
 import { UnavailableModelClient } from './infrastructure/deepseek/unavailable-model-client.js';
@@ -23,6 +24,7 @@ import { RuntimeTelemetry } from './infrastructure/runtime/runtime-telemetry.js'
 import { InstrumentedToolExecutor } from './infrastructure/runtime/instrumented-tool-executor.js';
 import { ResearchDocumentRenderer } from './infrastructure/export/research-document-renderer.js';
 import { createToolRegistryExecutor } from './infrastructure/tools/tool-registry.adapter.js';
+import { ResearchCoordinator } from './agent/research-coordinator.js';
 import { createEconomicCalendarGateway } from './economic-calendar/gateway.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
@@ -56,12 +58,23 @@ export class AppModule implements NestModule {
           provide: MODEL_CLIENT,
           inject: [AppConfigService, RuntimeTelemetry],
           useFactory: (config: AppConfigService, telemetry: RuntimeTelemetry): ModelClient => {
-            const configured = Boolean(config.value.deepSeekApiKey);
-            telemetry.setModelConfigured(configured);
-            const inner = configured
-              ? new DeepSeekClient({ apiKey: config.value.deepSeekApiKey!, baseUrl: config.value.deepSeekBaseUrl, model: config.value.deepSeekModel })
-              : new UnavailableModelClient();
-            return new ResilientModelClient(inner, telemetry, config.value.modelResilience);
+            const primaryConfigured = Boolean(config.value.deepSeekApiKey);
+            const fallback = config.value.modelFallback;
+            telemetry.setModelConfigured(primaryConfigured || Boolean(fallback));
+
+            const createResilientClient = (apiKey: string, baseUrl: string, model: string): ModelClient => new ResilientModelClient(
+              new DeepSeekClient({ apiKey, baseUrl, model }),
+              telemetry,
+              config.value.modelResilience
+            );
+
+            const primary = primaryConfigured
+              ? createResilientClient(config.value.deepSeekApiKey!, config.value.deepSeekBaseUrl, config.value.deepSeekModel)
+              : new ResilientModelClient(new UnavailableModelClient(), telemetry, config.value.modelResilience);
+            if (!fallback) return primary;
+
+            const secondary = createResilientClient(fallback.apiKey, fallback.baseUrl, fallback.model);
+            return new FailoverModelClient(primary, secondary, () => telemetry.recordModelFailover());
           }
         },
         {
@@ -89,7 +102,12 @@ export class AppModule implements NestModule {
         {
           provide: AGENT_RUNNER,
           inject: [MODEL_CLIENT, TOOL_EXECUTOR, PLANNER],
-          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner): AgentRunner => new LangGraphAgentRunner({ model, tools, planner })
+          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner): AgentRunner => new LangGraphAgentRunner({
+            model,
+            tools,
+            planner,
+            coordinator: new ResearchCoordinator(model)
+          })
         },
         {
           provide: ChatApplicationService,

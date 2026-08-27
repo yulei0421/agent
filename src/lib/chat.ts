@@ -1,8 +1,12 @@
+import type { AgentCollaborationEvent, AgentPlanSnapshot } from '../../shared/agent-events.js';
+
 export type ChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
 export type FinancialContext = { financial: { tab: import('../types.js').FinancialTab; symbol: string } };
 export type ChatResponseFormat = 'text' | 'financial_research';
 export type StreamEvent =
   | { type: 'delta' | 'reasoning'; content: string }
+  | ({ type: 'plan' } & AgentPlanSnapshot)
+  | AgentCollaborationEvent
   | { type: 'tool'; id?: string; name: string }
   | { type: 'tool_result'; id?: string; name: string; ok: boolean; result?: unknown; errorCode?: string }
   | { type: 'error'; message: string }
@@ -10,6 +14,8 @@ export type StreamEvent =
 export type StreamHandlers = {
   onDelta?(content: string): void;
   onReasoning?(content: string): void;
+  onPlan?(event: Extract<StreamEvent, { type: 'plan' }>): void;
+  onAgent?(event: Extract<StreamEvent, { type: 'agent' }>): void;
   onTool?(event: Extract<StreamEvent, { type: 'tool' }>): void;
   onToolResult?(event: Extract<StreamEvent, { type: 'tool_result' }>): void;
   onDone?(): void;
@@ -20,6 +26,26 @@ function isStreamEvent(value: unknown): value is StreamEvent {
   const event = value as Record<string, unknown>;
   if (event.type === 'done') return true;
   if (event.type === 'delta' || event.type === 'reasoning') return typeof event.content === 'string';
+  if (event.type === 'plan') {
+    return Array.isArray(event.steps)
+      && event.steps.every((step) => (
+        step !== null
+        && typeof step === 'object'
+        && !Array.isArray(step)
+        && typeof step.title === 'string'
+        && ['pending', 'in_progress', 'completed'].includes(step.status)
+      ))
+      && typeof event.currentStep === 'number'
+      && Number.isInteger(event.currentStep)
+      && event.currentStep >= 0
+      && typeof event.completed === 'boolean';
+  }
+  if (event.type === 'agent') {
+    return typeof event.role === 'string'
+      && ['researcher', 'risk_reviewer'].includes(event.role)
+      && typeof event.status === 'string'
+      && ['started', 'completed', 'failed'].includes(event.status);
+  }
   if (event.type === 'tool') return typeof event.name === 'string';
   if (event.type === 'tool_result') return typeof event.name === 'string' && typeof event.ok === 'boolean';
   return event.type === 'error' && typeof event.message === 'string';
@@ -68,6 +94,8 @@ export async function streamChat(
       if (!isStreamEvent(event)) continue;
       if (event.type === 'tool') handlers.onTool?.(event);
       if (event.type === 'tool_result') handlers.onToolResult?.(event);
+      if (event.type === 'plan') handlers.onPlan?.(event);
+      if (event.type === 'agent') handlers.onAgent?.(event);
       if (event.type === 'reasoning') handlers.onReasoning?.(event.content);
       if (event.type === 'delta') handlers.onDelta?.(event.content);
       if (event.type === 'error') throw new Error(event.message);

@@ -41,6 +41,7 @@ export interface AgentRunRequest {
   onEvent?: (event: AgentSseEvent) => void;
   ip: string;
   now: () => Date;
+  collaboration?: 'research';
 }
 
 export interface AgentRunner {

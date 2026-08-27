@@ -153,6 +153,9 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .tool-events ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .tool-events li { color: var(--muted); }
 .live-context, .live-weather, .web-search-sources { padding: 8px 0; }
+.agent-events { padding: 8px 0; }
+.agent-events ul { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.agent-events li { display: inline-flex; gap: 6px; border: 1px solid var(--line-soft); border-radius: 999px; padding: 4px 8px; color: var(--ink-muted); font-size: 12px; }
 .freshness-meta, .live-context span, .live-weather span { color: var(--subtle); font-size: var(--text-meta); }
 .technical-indicators-card, .economic-calendar-card { display: grid; gap: 12px; max-width: 620px; padding: 16px; border: 1px solid #b7d2c9; border-radius: var(--radius-control); background: linear-gradient(135deg, #f7fbf7, var(--surface-raised)); color: var(--ink); }
 .technical-indicators-card header, .economic-calendar-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -218,6 +221,24 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .research-export-actions button { min-height: 34px; padding: 7px 12px; border: 1px solid var(--accent-deep); border-radius: 999px; background: var(--surface-raised); color: var(--accent-deep); font-size: var(--text-meta); font-weight: 800; }
 .research-export-actions button:disabled { cursor: wait; opacity: 0.62; }
 .research-export-error { color: #a33a2b; font-size: var(--text-meta); }
+.message-retry { margin: 10px 0 0; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: transparent; color: var(--accent-deep); font-size: var(--text-meta); font-weight: 700; }
+.message-retry:hover { background: var(--accent-soft); }
+.composer-attachment { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.attachment-picker { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--accent-deep); cursor: pointer; font-size: var(--text-meta); font-weight: 700; }
+.attachment-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.attachment-chip { min-height: 30px; padding: 5px 10px; border: 1px solid var(--accent-deep); border-radius: 999px; background: var(--accent-soft); color: var(--accent-deep); font-size: var(--text-meta); }
+.attachment-error { color: #a33a2b; font-size: var(--text-meta); }
+.agent-plan { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface-raised) 88%, var(--accent-soft)); }
+.agent-plan-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.agent-plan-heading h3 { margin: 0; color: var(--ink); font-size: var(--text-meta); letter-spacing: .08em; text-transform: uppercase; }
+.agent-plan-heading span { color: var(--muted); font-size: var(--text-meta); }
+.agent-plan ol { display: grid; gap: 9px; margin: 12px 0 0; padding: 0; list-style: none; }
+.agent-plan-step { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: var(--text-body); line-height: 1.45; }
+.agent-plan-step.in_progress { color: var(--ink); font-weight: 700; }
+.agent-plan-step.completed { color: var(--muted); }
+.agent-plan-marker { display: inline-grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 12px; }
+.agent-plan-step.in_progress .agent-plan-marker { color: var(--accent-deep); background: var(--accent-soft); }
+.agent-plan-step.completed .agent-plan-marker { color: var(--accent-deep); background: color-mix(in srgb, var(--accent-soft) 72%, white); }
 .research-asset-selector h2, .research-query-state h2, .research-query-brief h2 { margin: 4px 0 8px; font-size: 18px; letter-spacing: -0.02em; }
 .research-asset-selector p, .research-query-state p, .research-query-brief p, .financial-context p { color: var(--muted); }
 .research-note { margin: 0 0 16px; }

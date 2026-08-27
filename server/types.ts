@@ -1,3 +1,5 @@
+import type { AgentCollaborationEvent, AgentPlanSnapshot } from '../shared/agent-events.js';
+
 export type ToolExecutionResult =
   | { ok: true; name: string; result: Record<string, unknown> | unknown[] }
   | { ok: false; name: string; errorCode: string };
@@ -35,6 +37,8 @@ export interface ToolRegistry {
 
 export type AgentSseEvent =
   | { type: 'delta' | 'reasoning'; content: string }
+  | ({ type: 'plan' } & AgentPlanSnapshot)
+  | AgentCollaborationEvent
   | { type: 'tool'; id?: string; name: string }
   | ({ type: 'tool_result'; id?: string; name: string } & ToolExecutionResult)
   | { type: 'error'; message: string; detail?: string }
@@ -45,6 +49,26 @@ export function isAgentSseEvent(value: unknown): value is AgentSseEvent {
   const event = value as Record<string, unknown>;
   if (event.type === 'done') return true;
   if (event.type === 'delta' || event.type === 'reasoning') return typeof event.content === 'string';
+  if (event.type === 'plan') {
+    return Array.isArray(event.steps)
+      && event.steps.every((step) => (
+        step !== null
+        && typeof step === 'object'
+        && !Array.isArray(step)
+        && typeof step.title === 'string'
+        && ['pending', 'in_progress', 'completed'].includes(step.status)
+      ))
+      && typeof event.currentStep === 'number'
+      && Number.isInteger(event.currentStep)
+      && event.currentStep >= 0
+      && typeof event.completed === 'boolean';
+  }
+  if (event.type === 'agent') {
+    return typeof event.role === 'string'
+      && ['researcher', 'risk_reviewer'].includes(event.role)
+      && typeof event.status === 'string'
+      && ['started', 'completed', 'failed'].includes(event.status);
+  }
   if (event.type === 'tool') return typeof event.name === 'string';
   if (event.type === 'error') return typeof event.message === 'string';
   return event.type === 'tool_result'

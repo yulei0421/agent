@@ -12,7 +12,9 @@ import { ChatWindow } from './components/ChatWindow.js';
 import { StatusBar } from './components/StatusBar.js';
 import { FinancialWorkspace } from './components/FinancialWorkspace.js';
 import type { AssetSearchResult } from './lib/market.js';
-import type { ChatRecord, AssetSearchState, FinancialTab, LocalUser, Session, ToolEvent, WebSocketStatus } from './types.js';
+import type { AgentPlanSnapshot } from '../shared/agent-events.js';
+import { collectResearchCitations } from '../shared/research-citations.js';
+import type { AgentEvent, ChatRecord, AssetSearchState, FinancialTab, LocalUser, Session, ToolEvent, WebSocketStatus } from './types.js';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '未知错误';
@@ -149,7 +151,7 @@ export default function App() {
     setError('');
     const sessionId = activeSessionId || (await createFirstSession());
     const userMessage: ChatRecord = { id: queuedId || id('msg'), sessionId, role: 'user', content, status: 'done', createdAt: now(), updatedAt: now() };
-    const assistantMessage: ChatRecord = { id: id('msg'), sessionId, role: 'assistant', content: '', status: 'streaming', toolEvents: [], createdAt: now(), updatedAt: now() };
+    const assistantMessage: ChatRecord = { id: id('msg'), sessionId, role: 'assistant', content: '', status: 'streaming', toolEvents: [], agentEvents: [], createdAt: now(), updatedAt: now() };
 
     await put('messages', userMessage);
     await put('messages', assistantMessage);
@@ -167,6 +169,8 @@ export default function App() {
     abortRef.current = new AbortController();
     setStreaming(true);
     let assistantToolEvents: ToolEvent[] = [];
+    let assistantAgentEvents: AgentEvent[] = [];
+    let assistantPlan: AgentPlanSnapshot | undefined;
     let assistantText = '';
     const typewriter = createTypewriter((text) => {
       assistantText = text;
@@ -188,6 +192,20 @@ export default function App() {
             : item
         )));
       }
+      function appendAgentEvent(event: AgentEvent): void {
+        assistantAgentEvents = [...assistantAgentEvents, event];
+        setMessages((prev) => prev.map((item) => (
+          item.id === assistantMessage.id
+            ? { ...item, agentEvents: [...(item.agentEvents ?? []), event], updatedAt: now() }
+            : item
+        )));
+      }
+      function updatePlan(plan: AgentPlanSnapshot): void {
+        assistantPlan = plan;
+        setMessages((prev) => prev.map((item) => (
+          item.id === assistantMessage.id ? { ...item, plan, updatedAt: now() } : item
+        )));
+      }
       const controller = abortRef.current;
       if (!controller) throw new Error('聊天请求未初始化');
       await streamChat(payload, controller.signal, {
@@ -196,6 +214,12 @@ export default function App() {
         },
         onToolResult(event) {
           appendToolEvent(event);
+        },
+        onPlan(event) {
+          updatePlan(event);
+        },
+        onAgent(event) {
+          appendAgentEvent(event);
         },
         onReasoning() {
           setMessages((prev) => prev.map((item) => (
@@ -208,25 +232,28 @@ export default function App() {
         onDone() {}
       }, financialContext, financialMode ? 'financial_research' : 'text');
       await typewriter.drain();
-      const researchReport = financialMode ? parseResearchReport(assistantText) : null;
+      const citationLedger = collectResearchCitations(assistantToolEvents);
+      const researchReport = financialMode
+        ? parseResearchReport(assistantText, { allowedSources: citationLedger.map((citation) => citation.id) })
+        : null;
       const completedContent = researchReport ? researchReport.conclusion : assistantText;
-      await put('messages', { ...assistantMessage, content: completedContent, status: 'done', toolEvents: assistantToolEvents, researchReport: researchReport ?? undefined, updatedAt: now() });
-      setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, content: completedContent, researchReport: researchReport ?? undefined, status: 'done' } : item)));
+      await put('messages', { ...assistantMessage, content: completedContent, status: 'done', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, plan: assistantPlan, researchReport: researchReport ?? undefined, updatedAt: now() });
+      setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, content: completedContent, agentEvents: assistantAgentEvents, plan: assistantPlan, researchReport: researchReport ?? undefined, status: 'done' } : item)));
     } catch (err) {
       typewriter.cancel();
       if (err instanceof Error && err.name === 'AbortError') {
         let stoppedAssistant: ChatRecord | undefined;
         setMessages((prev) => prev.map((item) => {
           if (item.id !== assistantMessage.id) return item;
-          stoppedAssistant = { ...item, status: 'stopped', content: item.content || '已停止生成。', updatedAt: now() };
+          stoppedAssistant = { ...item, status: 'stopped', content: item.content || '已停止生成。', agentEvents: assistantAgentEvents, plan: assistantPlan, updatedAt: now() };
           return stoppedAssistant;
         }));
-        await put('messages', stoppedAssistant || { ...assistantMessage, status: 'stopped', content: '已停止生成。', toolEvents: assistantToolEvents, updatedAt: now() });
+        await put('messages', stoppedAssistant || { ...assistantMessage, status: 'stopped', content: '已停止生成。', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, updatedAt: now() });
       } else {
         await enqueueOffline(userMessage);
         const message = errorMessage(err);
         setError(message);
-        const failedAssistant: ChatRecord = { ...assistantMessage, status: 'error', content: `请求失败：${message}`, updatedAt: now() };
+        const failedAssistant: ChatRecord = { ...assistantMessage, status: 'error', content: `请求失败：${message}`, agentEvents: assistantAgentEvents, plan: assistantPlan, updatedAt: now() };
         failedAssistant.toolEvents = assistantToolEvents;
         await put('messages', failedAssistant);
         setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? failedAssistant : item)));
@@ -266,6 +293,13 @@ export default function App() {
 
   function stop() {
     abortRef.current?.abort();
+  }
+
+  async function retryMessage(message: ChatRecord): Promise<void> {
+    if (streaming || message.role !== 'assistant' || (message.status !== 'error' && message.status !== 'stopped')) return;
+    const messageIndex = activeMessages.findIndex((item) => item.id === message.id);
+    const source = activeMessages.slice(0, messageIndex).reverse().find((item) => item.role === 'user' && item.status === 'done');
+    if (source) await send(source.content);
   }
 
   function selectAsset(result: AssetSearchResult): void {
@@ -389,10 +423,11 @@ export default function App() {
               streaming={streaming}
               onSend={send}
               onStop={stop}
+              onRetry={(message) => void retryMessage(message)}
             />
           </div>
         ) : (
-          <ChatWindow messages={activeMessages} streaming={streaming} financialMode={financialMode} onSend={send} onStop={stop} />
+          <ChatWindow messages={activeMessages} streaming={streaming} financialMode={financialMode} onSend={send} onStop={stop} onRetry={(message) => void retryMessage(message)} />
         )}
       </section>
     </main>

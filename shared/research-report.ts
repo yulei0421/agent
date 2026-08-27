@@ -12,6 +12,10 @@ export interface ResearchReport {
   asOf?: string;
 }
 
+export interface ResearchReportParseOptions {
+  allowedSources?: readonly string[];
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function isPlainObject(value: unknown): value is UnknownRecord {
@@ -50,7 +54,7 @@ function parseValue(value: string | unknown): unknown {
 }
 
 // Accept only the small presentation contract, never arbitrary model JSON.
-export function parseResearchReport(value: string | unknown): ResearchReport | null {
+export function parseResearchReport(value: string | unknown, options: ResearchReportParseOptions = {}): ResearchReport | null {
   const candidate = parseValue(value);
   if (!isPlainObject(candidate)) return null;
   const title = boundedText(candidate.title, 120);
@@ -64,6 +68,7 @@ export function parseResearchReport(value: string | unknown): ResearchReport | n
     const claim = boundedText(row.claim, 500);
     const source = boundedText(row.source, 128);
     if (!claim || !source) return null;
+    if (options.allowedSources && !options.allowedSources.includes(source)) return null;
     const observedAt = row.observedAt === undefined ? undefined : isoTime(row.observedAt);
     if (row.observedAt !== undefined && !observedAt) return null;
     return { claim, source, ...(observedAt ? { observedAt } : {}) };

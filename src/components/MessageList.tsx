@@ -1,7 +1,7 @@
 import { MessageItem } from './MessageItem.js';
 import type { ChatRecord } from '../types.js';
 
-export function MessageList({ messages, streaming }: { messages: readonly ChatRecord[]; streaming: boolean }) {
+export function MessageList({ messages, streaming, onRetry }: { messages: readonly ChatRecord[]; streaming: boolean; onRetry?: (message: ChatRecord) => void }) {
   if (messages.length === 0) {
     return (
       <section className="message-list chat-empty-list" aria-live="polite">
@@ -18,7 +18,7 @@ export function MessageList({ messages, streaming }: { messages: readonly ChatRe
     <div className="message-list" aria-live="polite">
       {messages.map((message) => (
         <div className="message-slot" key={message.id}>
-          <MessageItem message={message} streaming={streaming} />
+          <MessageItem message={message} streaming={streaming} onRetry={() => onRetry?.(message)} />
         </div>
       ))}
     </div>

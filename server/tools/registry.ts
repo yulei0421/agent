@@ -168,6 +168,7 @@ function normalizeNews(response: UnknownRecord): UnknownRecord {
     result.sources = response.sources
       .filter(isObject)
       .map((source) => normalizeFields(source, {
+        citationId: (value) => stableId(value, 32),
         title: (value) => text(value, 300),
         publisher: (value) => text(value, 160),
         publishedAt: isoTimestamp

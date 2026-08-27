@@ -4,6 +4,7 @@ import type { ToolExecutionResult } from '../domain/tools/tool.types.js';
 import { AppError } from '../domain/errors/app-error.js';
 import type { DeepSeekSseEvent } from '../sse.js';
 import type { AgentSseEvent } from '../types.js';
+import type { AgentPlanSnapshot } from '../../shared/agent-events.js';
 import {
   AgentStateAnnotation,
   normalizePlan,
@@ -35,6 +36,22 @@ export interface OnlineAgentDependencies {
 
 function publish(state: typeof AgentStateAnnotation.State, event: AgentSseEvent): void {
   state.onEvent?.(event);
+}
+
+function planSnapshot(plan: readonly string[], currentStep: number): AgentPlanSnapshot {
+  const boundedStep = Math.max(0, Math.min(currentStep, plan.length));
+  return {
+    currentStep: boundedStep,
+    completed: plan.length > 0 && boundedStep >= plan.length,
+    steps: plan.map((title, index) => ({
+      title,
+      status: index < boundedStep ? 'completed' : index === boundedStep ? 'in_progress' : 'pending'
+    }))
+  };
+}
+
+function planEvent(plan: readonly string[], currentStep: number): AgentSseEvent {
+  return { type: 'plan', ...planSnapshot(plan, currentStep) };
 }
 
 function isCompleteJson(value: string): boolean {
@@ -302,7 +319,11 @@ function createPlanNode(planner: Planner | undefined) {
       if (!Array.isArray(rawPlan) || rawPlan.some((step) => typeof step !== 'string')) {
         return { plan: [], currentStep: 0, terminated: false };
       }
-      return { plan: normalizePlan(rawPlan), currentStep: 0, terminated: false };
+      const plan = normalizePlan(rawPlan);
+      if (plan.length === 0) return { plan, currentStep: 0, terminated: false };
+      const event = planEvent(plan, 0);
+      publish(state, event);
+      return { plan, currentStep: 0, terminated: false, events: [event] };
     } catch {
       if (state.signal?.aborted) return { finalized: true, terminated: true };
       return { plan: [], currentStep: 0, terminated: false };
@@ -458,6 +479,7 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
     const toolRounds = state.toolRounds + 1;
     const currentStep = nextStep(state.plan, state.currentStep);
     const planComplete = state.plan.length > 0 && currentStep >= state.plan.length;
+    if (state.plan.length > 0) addEvent(planEvent(state.plan, currentStep));
     const lastToolRound = assessToolRound(outcomes);
     const consecutiveFailedToolRounds = lastToolRound.attempted > 0 && lastToolRound.failed === lastToolRound.attempted
       ? state.consecutiveFailedToolRounds + 1

@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import { MODEL_CLIENT, PLANNER, type ModelClient, type Planner } from '../server/application/chat/chat.ports.js';
 import { ResilientModelClient } from '../server/infrastructure/deepseek/resilient-model-client.js';
+import { FailoverModelClient } from '../server/infrastructure/deepseek/failover-model-client.js';
 import { RuntimeTelemetry } from '../server/infrastructure/runtime/runtime-telemetry.js';
 import { createApp } from '../server/main.js';
 
@@ -20,6 +21,27 @@ test('the Nest composition root provides a planner function', async () => {
     assert.equal(typeof planner, 'function');
     assert.ok(model instanceof ResilientModelClient);
     assert.deepEqual(telemetry.modelStatus(), { configured: false, circuit: 'closed' });
+  } finally {
+    await app.close();
+  }
+});
+
+test('the Nest composition root wraps a complete fallback model configuration with health-based failover', async () => {
+  const app = await createApp({
+    PORT: '8787',
+    CLIENT_URL: 'http://127.0.0.1:5173',
+    DEEPSEEK_API_KEY: 'primary-key',
+    MODEL_FALLBACK_API_KEY: 'fallback-key',
+    MODEL_FALLBACK_BASE_URL: 'https://fallback.example',
+    MODEL_FALLBACK_NAME: 'fallback-model'
+  });
+
+  try {
+    const model = app.get<ModelClient>(MODEL_CLIENT);
+    const telemetry = app.get(RuntimeTelemetry);
+
+    assert.ok(model instanceof FailoverModelClient);
+    assert.deepEqual(telemetry.modelStatus(), { configured: true, circuit: 'closed' });
   } finally {
     await app.close();
   }

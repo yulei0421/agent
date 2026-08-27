@@ -33,6 +33,7 @@ test('searchWeb filters unsafe or incomplete RSS items and exposes only normaliz
   assert.deepEqual(result, {
     ok: true,
     sources: [{
+      citationId: 'news-1',
       title: '可信新闻',
       url: 'https://news.google.com/rss/articles/CBMi123',
       publisher: '演示媒体',

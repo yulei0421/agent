@@ -66,12 +66,14 @@ test('builds trusted messages and delegates the run to the agent runner', async 
   const request = requests[0] as {
     goal: string;
     messages: unknown;
+    collaboration?: string;
     signal: AbortSignal;
     ip: string;
     now: () => Date;
     onEvent?: typeof onEvent;
   };
   assert.equal(request.goal, 'What is BTC?');
+  assert.equal(request.collaboration, undefined);
   assert.equal(request.signal, controller.signal);
   assert.equal(request.ip, '203.0.113.7');
   assert.equal(request.now(), timestamp);
@@ -98,6 +100,7 @@ test('passes the JSON-object constraint only for validated financial research re
   const researchMessages = (requests[0] as { messages: readonly { role: string; content?: string }[] }).messages;
   assert.equal(researchMessages.some((message) => message.content?.includes('Authoritative server output contract')), true);
   assert.deepEqual((requests[0] as { responseFormat?: unknown }).responseFormat, { type: 'json_object' });
+  assert.equal((requests[0] as { collaboration?: unknown }).collaboration, 'research');
   const ordinaryMessages = (requests[1] as { messages: readonly { role: string; content?: string }[] }).messages;
   assert.equal(ordinaryMessages.some((message) => message.content?.includes('Authoritative server output contract')), false);
   assert.equal((requests[1] as { responseFormat?: unknown }).responseFormat, undefined);

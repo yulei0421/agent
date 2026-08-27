@@ -59,3 +59,13 @@ test('records only the newly registered technical and economic-calendar labels',
   assert.match(metrics, /tool="get_economic_calendar",status="unknown"\} 1/);
   assert.match(metrics, /source="forexfactory",status="success"\} 1/);
 });
+
+test('counts model failovers without recording model configuration or request data', () => {
+  const telemetry = new RuntimeTelemetry();
+  telemetry.recordModelFailover();
+  telemetry.recordModelFailover();
+  const metrics = telemetry.metrics();
+
+  assert.match(metrics, /agent_model_failover_total 2/);
+  assert.doesNotMatch(metrics, /fallback\.example|private user prompt|secret/);
+});

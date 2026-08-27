@@ -411,6 +411,7 @@ test('executes search_news with its adapter clock and returns sanitized news dat
         ok: true,
         sources: [
           {
+            citationId: 'news-1',
             title: '上海市场早报',
             publisher: '财经日报',
             publishedAt: '2026-07-20T01:00:00.000Z',
@@ -446,7 +447,7 @@ test('executes search_news with its adapter clock and returns sanitized news dat
     name: 'search_news',
     result: {
       sources: [
-        { title: '上海市场早报', publisher: '财经日报', publishedAt: '2026-07-20T01:00:00.000Z' },
+        { citationId: 'news-1', title: '上海市场早报', publisher: '财经日报', publishedAt: '2026-07-20T01:00:00.000Z' },
         { publishedAt: '2026-07-20T00:00:00.000Z' },
         { title: 'Apple: Q2 earnings beat estimates', publisher: '财经日报', publishedAt: '2026-07-20T00:30:00.000Z' }
       ],

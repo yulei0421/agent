@@ -67,6 +67,27 @@ test('validates model resilience configuration boundaries', () => {
   }
 });
 
+test('enables a fallback model only when its complete configuration is present', () => {
+  assert.deepEqual(parseAppConfig({
+    MODEL_FALLBACK_API_KEY: 'fallback-key',
+    MODEL_FALLBACK_BASE_URL: 'https://fallback.example/',
+    MODEL_FALLBACK_NAME: 'fallback-model'
+  }).modelFallback, {
+    apiKey: 'fallback-key',
+    baseUrl: 'https://fallback.example',
+    model: 'fallback-model'
+  });
+
+  for (const environment of [
+    { MODEL_FALLBACK_API_KEY: 'fallback-key' },
+    { MODEL_FALLBACK_BASE_URL: 'https://fallback.example' },
+    { MODEL_FALLBACK_NAME: 'fallback-model' },
+    { MODEL_FALLBACK_API_KEY: 'fallback-key', MODEL_FALLBACK_BASE_URL: 'not-a-url', MODEL_FALLBACK_NAME: 'fallback-model' }
+  ]) {
+    assert.throws(() => parseAppConfig(environment));
+  }
+});
+
 test('builds the Nest application without opening a network listener', async () => {
   const app = await createApp({
     PORT: '8787',
