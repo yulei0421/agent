@@ -2,14 +2,15 @@ import type { ResearchReport } from './research-report.js';
 
 export type ResearchDocumentFormat = 'pdf' | 'pptx';
 
-function filename(response: Response, fallback: string): string {
-  const header = response.headers.get('Content-Disposition') ?? '';
-  const match = /filename="([A-Za-z0-9._-]+)"/u.exec(header);
-  return match?.[1] ?? fallback;
+export interface ResearchDownloadLink {
+  downloadUrl: string;
+  filename: string;
+  expiresAt: string;
+  format: ResearchDocumentFormat;
 }
 
-export async function downloadResearchReport(report: ResearchReport, format: ResearchDocumentFormat): Promise<void> {
-  const response = await fetch(`/api/exports/research/${format}`, {
+export async function createResearchDownloadLink(report: ResearchReport, format: ResearchDocumentFormat): Promise<ResearchDownloadLink> {
+  const response = await fetch(`/api/exports/research/${format}/link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ report })
@@ -18,12 +19,26 @@ export async function downloadResearchReport(report: ResearchReport, format: Res
     const error = await response.json().catch((): { errorCode?: unknown } => ({})) as { errorCode?: unknown };
     throw new Error(typeof error.errorCode === 'string' ? error.errorCode : `导出失败：${response.status}`);
   }
-  const body = await response.blob();
-  const url = URL.createObjectURL(body);
+  const linkPayload = await response.json().catch((): Partial<ResearchDownloadLink> => ({})) as Partial<ResearchDownloadLink>;
+  if (typeof linkPayload.downloadUrl !== 'string' || !/^\/api\/exports\/research\/download\/[A-Za-z0-9_-]{32,128}$/u.test(linkPayload.downloadUrl)) {
+    throw new Error('导出链接无效');
+  }
+  if (typeof linkPayload.filename !== 'string' || typeof linkPayload.expiresAt !== 'string' || linkPayload.format !== format) {
+    throw new Error('导出链接无效');
+  }
+  return {
+    downloadUrl: linkPayload.downloadUrl,
+    filename: linkPayload.filename,
+    expiresAt: linkPayload.expiresAt,
+    format: linkPayload.format
+  };
+}
+
+export async function downloadResearchReport(report: ResearchReport, format: ResearchDocumentFormat): Promise<void> {
+  const linkPayload = await createResearchDownloadLink(report, format);
   const link = document.createElement('a');
-  link.href = url;
-  link.download = filename(response, `financial-research.${format}`);
+  link.href = linkPayload.downloadUrl;
+  link.download = linkPayload.filename;
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
 }

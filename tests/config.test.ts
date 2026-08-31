@@ -21,6 +21,7 @@ test('normalizes valid server configuration', () => {
     deepSeekApiKey: 'test-key',
     deepSeekBaseUrl: 'https://api.deepseek.com',
     deepSeekModel: 'deepseek-v4-flash',
+    ocrLanguage: 'chi_sim+eng',
     modelResilience: {
       totalTimeoutMs: 60000,
       firstEventTimeoutMs: 15000,
@@ -36,6 +37,19 @@ test('accepts only a safe absolute PDF CJK font path', () => {
   assert.equal(parseAppConfig({ PDF_CJK_FONT_PATH: '/usr/share/fonts/NotoSansCJK-Regular.ttc' }).pdfFontPath, '/usr/share/fonts/NotoSansCJK-Regular.ttc');
   assert.throws(() => parseAppConfig({ PDF_CJK_FONT_PATH: 'relative/font.ttf' }));
   assert.throws(() => parseAppConfig({ PDF_CJK_FONT_PATH: '/font\nnext.ttf' }));
+});
+
+test('normalizes OCR settings and rejects unsafe language or asset paths', () => {
+  const config = parseAppConfig({
+    OCR_LANGUAGE: 'eng+chi_sim',
+    TESSERACT_LANG_PATH: '/opt/tesseract/lang',
+    TESSERACT_WORKER_PATH: '/opt/tesseract/worker.js',
+    TESSERACT_CORE_PATH: '/opt/tesseract/core.wasm.js'
+  });
+  assert.equal(config.ocrLanguage, 'eng+chi_sim');
+  assert.equal(config.tesseractLangPath, '/opt/tesseract/lang');
+  assert.throws(() => parseAppConfig({ OCR_LANGUAGE: 'eng;rm' }));
+  assert.throws(() => parseAppConfig({ TESSERACT_CORE_PATH: 'relative/core.js' }));
 });
 
 test('validates model resilience configuration boundaries', () => {
@@ -86,6 +100,22 @@ test('enables a fallback model only when its complete configuration is present',
   ]) {
     assert.throws(() => parseAppConfig(environment));
   }
+});
+
+test('accepts complete task-specific model route configuration', () => {
+  assert.deepEqual(parseAppConfig({
+    MODEL_FAST_API_KEY: 'fast-key',
+    MODEL_FAST_BASE_URL: 'https://fast.example/',
+    MODEL_FAST_NAME: 'fast-model',
+    MODEL_REASONING_API_KEY: 'reason-key',
+    MODEL_REASONING_BASE_URL: 'https://reason.example',
+    MODEL_REASONING_NAME: 'reason-model'
+  }).modelRoutes, {
+    fast: { apiKey: 'fast-key', baseUrl: 'https://fast.example', model: 'fast-model' },
+    reasoning: { apiKey: 'reason-key', baseUrl: 'https://reason.example', model: 'reason-model' }
+  });
+  assert.throws(() => parseAppConfig({ MODEL_FAST_API_KEY: 'fast-key' }));
+  assert.throws(() => parseAppConfig({ MODEL_STRUCTURED_BASE_URL: 'https://structured.example' }));
 });
 
 test('builds the Nest application without opening a network listener', async () => {

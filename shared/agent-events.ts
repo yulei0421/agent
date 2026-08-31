@@ -18,4 +18,9 @@ export interface AgentCollaborationEvent {
   type: 'agent';
   role: AgentRole;
   status: AgentRunStatus;
+  budget?: {
+    maxItems: number;
+    timeoutMs: number;
+    usedItems?: number;
+  };
 }

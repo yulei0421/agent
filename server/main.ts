@@ -21,7 +21,8 @@ export async function createApp(environment: NodeJS.ProcessEnv = process.env): P
       }
     }
   }));
-  app.use(json({ limit: '1mb' }));
+  // Base64 expands an 8 MB binary upload to roughly 11 MB in JSON.
+  app.use(json({ limit: '12mb' }));
   app.enableCors({
     origin: config.clientUrl,
     allowedHeaders: ['Content-Type'],

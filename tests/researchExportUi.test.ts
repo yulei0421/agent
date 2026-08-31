@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { downloadResearchReport } from '../src/lib/research-export.js';
+import { createResearchDownloadLink, downloadResearchReport } from '../src/lib/research-export.js';
 
 async function source(path: string): Promise<string> {
   return readFile(new URL(path, import.meta.url), 'utf8');
@@ -14,7 +14,7 @@ test('clicks a server-owned download link after a successful export request', as
   const clicked: { href?: string; download?: string }[] = [];
   globalThis.fetch = async (url, init) => {
     requests.push({ url: String(url), init });
-    return new Response(JSON.stringify({ downloadUrl: '/api/exports/research/download/token_123', filename: 'financial-research.pdf' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ downloadUrl: '/api/exports/research/download/token_12345678901234567890123456789012', filename: 'financial-research.pdf', expiresAt: '2026-08-28T12:00:00.000Z', format: 'pdf' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement: () => {
     const link: { href?: string; download?: string; click: () => void; remove: () => void } = {
@@ -33,7 +33,27 @@ test('clicks a server-owned download link after a successful export request', as
 
   assert.equal(requests[0]?.url, '/api/exports/research/pdf/link');
   assert.equal(requests[0]?.init?.method, 'POST');
-  assert.deepEqual(clicked, [{ href: '/api/exports/research/download/token_123', download: 'financial-research.pdf' }]);
+  assert.deepEqual(clicked, [{ href: '/api/exports/research/download/token_12345678901234567890123456789012', download: 'financial-research.pdf' }]);
+});
+
+test('returns the validated server-owned link for callers that render a visible anchor', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    downloadUrl: '/api/exports/research/download/token_12345678901234567890123456789012',
+    filename: 'financial-research.pdf',
+    expiresAt: '2026-08-28T12:00:00.000Z',
+    format: 'pdf'
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  try {
+    assert.deepEqual(await createResearchDownloadLink({ title: '研究', conclusion: '结论', evidence: [], risks: [] }, 'pdf'), {
+      downloadUrl: '/api/exports/research/download/token_12345678901234567890123456789012',
+      filename: 'financial-research.pdf',
+      expiresAt: '2026-08-28T12:00:00.000Z',
+      format: 'pdf'
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('shows PDF and PPTX export actions only for parsed research reports', async () => {

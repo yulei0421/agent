@@ -1,25 +1,9 @@
 import type { ModelClient, ModelConversationMessage, ModelRequest } from '../application/chat/chat.ports.js';
 import { AppError } from '../domain/errors/app-error.js';
 import type { AgentCollaborationEvent, AgentRole } from '../../shared/agent-events.js';
+import { SubAgentRegistry, type SubAgentDefinition } from './sub-agent-registry.js';
 
-const MAX_ITEMS = 4;
 const MAX_ITEM_LENGTH = 180;
-
-interface DelegateDefinition {
-  role: AgentRole;
-  system: string;
-}
-
-const DELEGATES: readonly DelegateDefinition[] = [
-  {
-    role: 'researcher',
-    system: 'You are the research delegate. Return only JSON {"items":["..."]}. List up to four data needs or comparison questions for the main agent. Do not state facts, sources, URLs, prices, or investment advice.'
-  },
-  {
-    role: 'risk_reviewer',
-    system: 'You are the risk reviewer delegate. Return only JSON {"items":["..."]}. List up to four checks for freshness, source consistency, uncertainty, or downside risks. Do not state facts, sources, URLs, prices, or investment advice.'
-  }
-];
 
 export interface ResearchCoordinatorRequest {
   goal: string;
@@ -46,14 +30,14 @@ function safeItem(value: unknown): string | undefined {
   return normalized;
 }
 
-function parseItems(content: string): readonly string[] {
+function parseItems(content: string, maxItems: number): readonly string[] {
   try {
     const value: unknown = JSON.parse(content);
     if (!isRecord(value) || !Array.isArray(value.items)) return [];
     return value.items
       .map(safeItem)
       .filter((item): item is string => Boolean(item))
-      .slice(0, MAX_ITEMS);
+      .slice(0, maxItems);
   } catch {
     return [];
   }
@@ -69,14 +53,31 @@ function delegateMessage(role: AgentRole, items: readonly string[]): ModelConver
 
 async function runDelegate(
   model: ModelClient,
-  definition: DelegateDefinition,
+  definition: SubAgentDefinition,
   request: ResearchCoordinatorRequest
 ): Promise<{ message: ModelConversationMessage | null; events: AgentCollaborationEvent[] }> {
-  const events: AgentCollaborationEvent[] = [{ type: 'agent', role: definition.role, status: 'started' }];
+  const events: AgentCollaborationEvent[] = [{ type: 'agent', role: definition.role, status: 'started', budget: { maxItems: definition.maxItems, timeoutMs: definition.timeoutMs } }];
   request.onEvent?.(events[0]!);
   if (request.signal.aborted) throw new AppError('request_aborted');
 
   let content = '';
+  const controller = new AbortController();
+  let rejectParent: ((error: AppError) => void) | undefined;
+  const parentAbort = new Promise<never>((_resolve, reject) => {
+    rejectParent = reject;
+  });
+  const onParentAbort = () => {
+    controller.abort();
+    rejectParent?.(new AppError('request_aborted'));
+  };
+  request.signal.addEventListener('abort', onParentAbort, { once: true });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new AppError('model_unavailable'));
+    }, definition.timeoutMs);
+  });
   try {
     const modelRequest: ModelRequest = {
       messages: [
@@ -84,36 +85,46 @@ async function runDelegate(
         { role: 'user', content: request.goal }
       ],
       tools: [],
+      taskType: 'reasoning',
       forceFinalAnswer: true,
       responseFormat: { type: 'json_object' }
     };
-    for await (const event of model.stream(modelRequest, request.signal)) {
-      if (request.signal.aborted) throw new AppError('request_aborted');
-      if (event.type === 'delta') {
-        content += event.content;
-        if (content.length > MAX_ITEM_LENGTH * MAX_ITEMS * 2) break;
+    const consume = (async () => {
+      for await (const event of model.stream(modelRequest, controller.signal)) {
+        if (request.signal.aborted) throw new AppError('request_aborted');
+        if (event.type === 'delta') {
+          content += event.content;
+          if (content.length > MAX_ITEM_LENGTH * definition.maxItems * 2) break;
+        }
+        if (event.type === 'error') throw new AppError('model_unavailable');
       }
-      if (event.type === 'error') throw new AppError('model_unavailable');
-    }
-    const message = delegateMessage(definition.role, parseItems(content));
-    const completed: AgentCollaborationEvent = { type: 'agent', role: definition.role, status: 'completed' };
+    })();
+    void consume.catch(() => undefined);
+    if (request.signal.aborted) throw new AppError('request_aborted');
+    await Promise.race([consume, timeoutPromise, parentAbort]);
+    const message = delegateMessage(definition.role, parseItems(content, definition.maxItems));
+    const completed: AgentCollaborationEvent = { type: 'agent', role: definition.role, status: 'completed', budget: { maxItems: definition.maxItems, timeoutMs: definition.timeoutMs, usedItems: parseItems(content, definition.maxItems).length } };
     events.push(completed);
     request.onEvent?.(completed);
     return { message, events };
   } catch (error) {
     if (error instanceof AppError && error.code === 'request_aborted') throw error;
-    const failed: AgentCollaborationEvent = { type: 'agent', role: definition.role, status: 'failed' };
+    const failed: AgentCollaborationEvent = { type: 'agent', role: definition.role, status: 'failed', budget: { maxItems: definition.maxItems, timeoutMs: definition.timeoutMs, usedItems: 0 } };
     events.push(failed);
     request.onEvent?.(failed);
     return { message: null, events };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    request.signal.removeEventListener('abort', onParentAbort);
+    rejectParent = undefined;
   }
 }
 
 export class ResearchCoordinator {
-  constructor(private readonly model: ModelClient) {}
+  constructor(private readonly model: ModelClient, private readonly registry: SubAgentRegistry = new SubAgentRegistry()) {}
 
   async prepare(request: ResearchCoordinatorRequest): Promise<ResearchCoordinatorResult> {
-    const results = await Promise.all(DELEGATES.map((definition) => runDelegate(this.model, definition, request)));
+    const results = await Promise.all(this.registry.definitionsList().map((definition) => runDelegate(this.model, definition, request)));
     return {
       messages: results.map((result) => result.message).filter((message): message is ModelConversationMessage => Boolean(message)),
       events: results.flatMap((result) => result.events)

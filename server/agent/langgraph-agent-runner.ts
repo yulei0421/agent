@@ -2,12 +2,14 @@ import { createOnlineAgentGraph, type OnlineAgentDependencies } from './graph.js
 import type { AgentRunRequest, AgentRunner, ModelClient, Planner, ToolExecutor } from '../application/chat/chat.ports.js';
 import type { AgentSseEvent } from '../types.js';
 import { ResearchCoordinator } from './research-coordinator.js';
+import type { InMemoryApprovalCoordinator } from './approval-coordinator.js';
 
 export interface LangGraphAgentRunnerDependencies {
   model: ModelClient;
   tools: ToolExecutor;
   planner?: Planner;
   coordinator?: ResearchCoordinator;
+  approval?: InMemoryApprovalCoordinator;
 }
 
 export class LangGraphAgentRunner implements AgentRunner {
@@ -18,7 +20,8 @@ export class LangGraphAgentRunner implements AgentRunner {
     const graphDependencies: OnlineAgentDependencies = {
       model: dependencies.model,
       tools: dependencies.tools,
-      planner: dependencies.planner
+      planner: dependencies.planner,
+      approval: dependencies.approval
     };
     // The graph is immutable after compilation and safely isolates invocation state.
     this.graph = createOnlineAgentGraph(graphDependencies);
@@ -43,7 +46,7 @@ export class LangGraphAgentRunner implements AgentRunner {
       ];
       events = [...delegated.events];
     }
-    const state = await this.graph.invoke({ ...request, messages, events });
+    const state = await this.graph.invoke({ ...request, messages, events, review: Boolean(request.review) });
     return state.events;
   }
 }

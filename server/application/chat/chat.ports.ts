@@ -9,11 +9,14 @@ export const AGENT_RUNNER = Symbol('AGENT_RUNNER');
 
 export type Planner = (goal: string, signal?: AbortSignal) => Promise<readonly string[]>;
 
+export type ModelTaskType = 'fast' | 'reasoning' | 'structured';
+
 export type JsonObjectResponseFormat = { type: 'json_object' };
 
 export interface ModelRequest {
   messages: readonly unknown[];
   tools: readonly unknown[];
+  taskType?: ModelTaskType;
   forceFinalAnswer?: boolean;
   responseFormat?: JsonObjectResponseFormat;
 }
@@ -42,6 +45,8 @@ export interface AgentRunRequest {
   ip: string;
   now: () => Date;
   collaboration?: 'research';
+  review?: boolean;
+  taskType?: ModelTaskType;
 }
 
 export interface AgentRunner {

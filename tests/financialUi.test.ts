@@ -44,6 +44,7 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
     'data: {"type":"tool","id":"call_quote","name":"get_quote"}\\n\\n',
     'data: {"type":"tool_result","id":"call_quote","name":"get_quote","ok":true,"result":{"data":{"price":210,"currency":"USD"},"meta":{"symbol":"AAPL","source":"yahoo-finance","asOf":"2026-07-15T00:00:00.000Z","delay":"15m"}}}\\n\\n',
     'data: {"type":"agent","role":"researcher","status":"completed"}\\n\\n',
+    'data: {"type":"approval","id":"approval_abc123456","calls":[{"name":"get_quote","arguments":"{\\"symbol\\":\\"AAPL\\"}"}]}\\n\\n',
     'data: {"type":"plan","currentStep":0,"completed":false,"steps":[{"title":"查询行情","status":"in_progress"},{"title":"总结风险","status":"pending"}]}\\n\\n',
     'data: {"type":"reasoning","content":"分析中"}\\n\\n',
     'data: {"type":"delta","content":"报价已就绪"}\\n\\n',
@@ -55,6 +56,7 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
       onTool: (event) => received.push(['tool', event]),
       onToolResult: (event) => received.push(['tool_result', event]),
       onAgent: (event) => received.push(['agent', event]),
+      onApproval: (event) => received.push(['approval', event]),
       onPlan: (event) => received.push(['plan', event]),
       onReasoning: (content) => received.push(['reasoning', content]),
       onDelta: (content) => received.push(['delta', content]),
@@ -68,6 +70,7 @@ test('streamChat forwards tool and tool_result events without disrupting text ev
     ['tool', { type: 'tool', id: 'call_quote', name: 'get_quote' }],
     ['tool_result', { type: 'tool_result', id: 'call_quote', name: 'get_quote', ok: true, result: { data: { price: 210, currency: 'USD' }, meta: { symbol: 'AAPL', source: 'yahoo-finance', asOf: '2026-07-15T00:00:00.000Z', delay: '15m' } } }],
     ['agent', { type: 'agent', role: 'researcher', status: 'completed' }],
+    ['approval', { type: 'approval', id: 'approval_abc123456', calls: [{ name: 'get_quote', arguments: '{"symbol":"AAPL"}' }] }],
     ['plan', { type: 'plan', currentStep: 0, completed: false, steps: [{ title: '查询行情', status: 'in_progress' }, { title: '总结风险', status: 'pending' }] }],
     ['reasoning', '分析中'],
     ['delta', '报价已就绪'],
@@ -120,14 +123,14 @@ test('failed and stopped assistant messages expose a local retry action', async 
 
   assert.match(app, /async function retryMessage\(message: ChatRecord\)/);
   assert.match(app, /message\.status !== 'error' && message\.status !== 'stopped'/);
-  assert.match(app, /await send\(source\.content\)/);
+  assert.match(app, /await send\(source\.content, undefined, source\.documents\)/);
   assert.match(item, /message\.status === 'error' \|\| message\.status === 'stopped'/);
   assert.match(item, /重新生成/);
   assert.match(list, /onRetry\?\.\(message\)/);
   assert.match(chat, /onRetry=\{onRetry\}/);
 });
 
-test('ChatWindow exposes bounded local text attachments without a server upload control', async () => {
+test('ChatWindow exposes bounded text and binary document attachments', async () => {
   const [chat, attachment] = await Promise.all([
     readSource('../src/components/ChatWindow.tsx'),
     readSource('../src/lib/attachments.ts')
@@ -136,16 +139,19 @@ test('ChatWindow exposes bounded local text attachments without a server upload 
   assert.match(chat, /添加文本附件/);
   assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
   assert.match(chat, /normalizeTextAttachment\(file\.name, await file\.text\(\)\)/);
-  assert.match(chat, /附件《\$\{attachment\.name\}》/);
+  assert.match(chat, /toChatDocument\(attachment\)/);
+  assert.match(chat, /ingestBinaryAttachment\(file\)/);
+  assert.match(chat, /历史文本附件会按问题在浏览器本地召回相关片段/);
   assert.match(attachment, /MAX_ATTACHMENT_CHARS = 3500/);
   assert.match(attachment, /ALLOWED_ATTACHMENT_EXTENSIONS/);
+  assert.match(attachment, /api\/documents\/ingest/);
 });
 
 test('App sends financial mode as bounded request context instead of a client system message', async () => {
   const source = await readSource('../src/App.tsx');
 
   assert.match(source, /financialMode\s*\?\s*\{\s*financial:\s*\{\s*tab:\s*financialTab,\s*symbol:\s*financialSymbol\s*}\s*}\s*:\s*undefined/);
-  assert.match(source, /streamChat\(payload, controller\.signal,[\s\S]*financialContext, financialMode \? 'financial_research' : 'text'\)/);
+  assert.match(source, /streamChat\(payload, controller\.signal,[\s\S]*financialContext, financialMode \? 'financial_research' : 'text', reviewMode, documents/);
   assert.doesNotMatch(source, /role:\s*'system',\s*content:\s*`金融工作台/);
 });
 

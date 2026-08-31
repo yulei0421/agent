@@ -4,8 +4,11 @@ import { parseResearchReport } from './lib/research-report.js';
 import { createTypewriter } from './lib/typewriter.js';
 import { searchAssets } from './lib/market.js';
 import { clear, getAll, id, now, put, remove } from './lib/db.js';
-import { buildModelMessages, normalizeInterruptedMessages } from './lib/history.js';
+import { buildLocalMemory, buildModelMessages, normalizeInterruptedMessages } from './lib/history.js';
+import { retrieveDocumentContext, type ChatDocument } from './lib/attachments.js';
+import { fetchCapabilities, type PublicCapability } from './lib/capabilities.js';
 import { connectStatusSocket } from './lib/websocket.js';
+import { cancelTask } from './lib/tasks.js';
 import { Login } from './components/Login.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatWindow } from './components/ChatWindow.js';
@@ -14,7 +17,7 @@ import { FinancialWorkspace } from './components/FinancialWorkspace.js';
 import type { AssetSearchResult } from './lib/market.js';
 import type { AgentPlanSnapshot } from '../shared/agent-events.js';
 import { collectResearchCitations } from '../shared/research-citations.js';
-import type { AgentEvent, ChatRecord, AssetSearchState, FinancialTab, LocalUser, Session, ToolEvent, WebSocketStatus } from './types.js';
+import type { AgentEvent, ApprovalEvent, ChatRecord, AssetSearchState, FinancialTab, LocalUser, Session, ToolEvent, WebSocketStatus } from './types.js';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '未知错误';
@@ -24,6 +27,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<LocalUser | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [capabilities, setCapabilities] = useState<readonly PublicCapability[]>([]);
   const [messages, setMessages] = useState<ChatRecord[]>([]);
   const [activeSessionId, setActiveSessionId] = useState('');
   const [wsStatus, setWsStatus] = useState<WebSocketStatus>('connecting');
@@ -31,6 +35,7 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState('');
   const [financialMode, setFinancialMode] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
   const [financialTab, setFinancialTab] = useState<FinancialTab>('markets');
   const [financialSymbol, setFinancialSymbol] = useState('AAPL');
   const [assetQuery, setAssetQuery] = useState('AAPL');
@@ -73,6 +78,13 @@ export default function App() {
     if (event.type === 'status') setWsStatus(event.status);
     if (event.type === 'notice') setNotice(event.message);
   }), []);
+
+  useEffect(() => {
+    if (!ready) return undefined;
+    const controller = new AbortController();
+    fetchCapabilities(controller.signal).then(setCapabilities).catch(() => setCapabilities([]));
+    return () => controller.abort();
+  }, [ready]);
 
   useEffect(() => {
     const query = assetQuery.trim();
@@ -139,24 +151,34 @@ export default function App() {
     setActiveSessionId(remainingSessions[0]?.id ?? '');
   }
 
-  async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
-    const session = sessions.find((item) => item.id === sessionId);
-    if (!session || session.title !== '新会话') return;
-    const updated = { ...session, title: title.slice(0, 20), updatedAt: now() };
-    await put('sessions', updated);
-    setSessions((prev) => prev.map((item) => (item.id === sessionId ? updated : item)));
-  }
-
-  async function send(content: string, queuedId?: string): Promise<void> {
+  async function send(content: string, queuedId?: string, attachments?: readonly ChatDocument[]): Promise<void> {
     setError('');
-    const sessionId = activeSessionId || (await createFirstSession());
-    const userMessage: ChatRecord = { id: queuedId || id('msg'), sessionId, role: 'user', content, status: 'done', createdAt: now(), updatedAt: now() };
+    let session = sessions.find((item) => item.id === activeSessionId);
+    let sessionId = activeSessionId;
+    if (!sessionId) {
+      session = await createFirstSession();
+      sessionId = session.id;
+    }
+    const userMessage: ChatRecord = {
+      id: queuedId || id('msg'),
+      sessionId,
+      role: 'user',
+      content,
+      status: 'done',
+      createdAt: now(),
+      updatedAt: now(),
+      ...(attachments && attachments.length > 0 ? { documents: attachments.map((document) => ({ ...document })) } : {})
+    };
     const assistantMessage: ChatRecord = { id: id('msg'), sessionId, role: 'assistant', content: '', status: 'streaming', toolEvents: [], agentEvents: [], createdAt: now(), updatedAt: now() };
 
     await put('messages', userMessage);
     await put('messages', assistantMessage);
     setMessages((prev) => [...prev.filter((item) => item.id !== userMessage.id), userMessage, assistantMessage]);
-    await updateSessionTitle(sessionId, content);
+    if (session?.title === '新会话') {
+      session = { ...session, title: content.slice(0, 20), updatedAt: now() };
+      await put('sessions', session);
+      setSessions((prev) => prev.map((item) => (item.id === session?.id ? session! : item)));
+    }
 
     if (!navigator.onLine) {
       await enqueueOffline(userMessage);
@@ -171,6 +193,8 @@ export default function App() {
     let assistantToolEvents: ToolEvent[] = [];
     let assistantAgentEvents: AgentEvent[] = [];
     let assistantPlan: AgentPlanSnapshot | undefined;
+    let assistantApproval: ApprovalEvent | undefined;
+    let assistantTaskId: string | undefined;
     let assistantText = '';
     const typewriter = createTypewriter((text) => {
       assistantText = text;
@@ -183,7 +207,12 @@ export default function App() {
       const financialContext = financialMode
         ? { financial: { tab: financialTab, symbol: financialSymbol } }
         : undefined;
-      const payload = buildModelMessages([...activeMessages, userMessage], 6000);
+      const payload = buildModelMessages([...activeMessages, userMessage], 6000, session?.memory);
+      const indexedDocuments = [
+        ...activeMessages.flatMap((message) => message.documents ?? []),
+        ...(attachments ?? [])
+      ];
+      const documents = retrieveDocumentContext(indexedDocuments, content);
       function appendToolEvent(event: ToolEvent): void {
         assistantToolEvents = [...assistantToolEvents, event];
         setMessages((prev) => prev.map((item) => (
@@ -206,9 +235,21 @@ export default function App() {
           item.id === assistantMessage.id ? { ...item, plan, updatedAt: now() } : item
         )));
       }
+      function updateApproval(approval: ApprovalEvent): void {
+        assistantApproval = approval;
+        setMessages((prev) => prev.map((item) => (
+          item.id === assistantMessage.id ? { ...item, approval, updatedAt: now() } : item
+        )));
+      }
       const controller = abortRef.current;
       if (!controller) throw new Error('聊天请求未初始化');
       await streamChat(payload, controller.signal, {
+        onTask(event) {
+          assistantTaskId = event.id;
+          setMessages((prev) => prev.map((item) => (
+            item.id === assistantMessage.id ? { ...item, taskId: event.id, updatedAt: now() } : item
+          )));
+        },
         onTool(event) {
           appendToolEvent(event);
         },
@@ -221,6 +262,9 @@ export default function App() {
         onAgent(event) {
           appendAgentEvent(event);
         },
+        onApproval(event) {
+          updateApproval(event);
+        },
         onReasoning() {
           setMessages((prev) => prev.map((item) => (
             item.id === assistantMessage.id && !item.content ? { ...item, content: '思考中...', updatedAt: now() } : item
@@ -230,30 +274,40 @@ export default function App() {
           typewriter.push(delta);
         },
         onDone() {}
-      }, financialContext, financialMode ? 'financial_research' : 'text');
+      }, financialContext, financialMode ? 'financial_research' : 'text', reviewMode, documents);
       await typewriter.drain();
-      const citationLedger = collectResearchCitations(assistantToolEvents);
+          const citationLedger = collectResearchCitations(assistantToolEvents, { now: new Date() });
       const researchReport = financialMode
         ? parseResearchReport(assistantText, { allowedSources: citationLedger.map((citation) => citation.id) })
         : null;
       const completedContent = researchReport ? researchReport.conclusion : assistantText;
-      await put('messages', { ...assistantMessage, content: completedContent, status: 'done', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, plan: assistantPlan, researchReport: researchReport ?? undefined, updatedAt: now() });
-      setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, content: completedContent, agentEvents: assistantAgentEvents, plan: assistantPlan, researchReport: researchReport ?? undefined, status: 'done' } : item)));
+          if (session) {
+            const memory = buildLocalMemory([
+              ...activeMessages,
+              userMessage,
+              { ...assistantMessage, content: completedContent, status: 'done' }
+            ], session.memory);
+            const updatedSession = { ...session, memory, updatedAt: now() };
+            await put('sessions', updatedSession);
+            setSessions((prev) => prev.map((item) => (item.id === session.id ? updatedSession : item)));
+          }
+          await put('messages', { ...assistantMessage, content: completedContent, status: 'done', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, plan: assistantPlan, approval: assistantApproval, citations: citationLedger, taskId: assistantTaskId, researchReport: researchReport ?? undefined, updatedAt: now() });
+          setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? { ...item, content: completedContent, agentEvents: assistantAgentEvents, plan: assistantPlan, approval: assistantApproval, citations: citationLedger, taskId: assistantTaskId, researchReport: researchReport ?? undefined, status: 'done' } : item)));
     } catch (err) {
       typewriter.cancel();
       if (err instanceof Error && err.name === 'AbortError') {
         let stoppedAssistant: ChatRecord | undefined;
         setMessages((prev) => prev.map((item) => {
           if (item.id !== assistantMessage.id) return item;
-          stoppedAssistant = { ...item, status: 'stopped', content: item.content || '已停止生成。', agentEvents: assistantAgentEvents, plan: assistantPlan, updatedAt: now() };
+          stoppedAssistant = { ...item, status: 'stopped', content: item.content || '已停止生成。', agentEvents: assistantAgentEvents, plan: assistantPlan, approval: assistantApproval, updatedAt: now() };
           return stoppedAssistant;
         }));
-        await put('messages', stoppedAssistant || { ...assistantMessage, status: 'stopped', content: '已停止生成。', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, updatedAt: now() });
-      } else {
-        await enqueueOffline(userMessage);
-        const message = errorMessage(err);
-        setError(message);
-        const failedAssistant: ChatRecord = { ...assistantMessage, status: 'error', content: `请求失败：${message}`, agentEvents: assistantAgentEvents, plan: assistantPlan, updatedAt: now() };
+          await put('messages', stoppedAssistant || { ...assistantMessage, status: 'stopped', content: '已停止生成。', toolEvents: assistantToolEvents, agentEvents: assistantAgentEvents, approval: assistantApproval, taskId: assistantTaskId, citations: collectResearchCitations(assistantToolEvents, { now: new Date() }), updatedAt: now() });
+        } else {
+          await enqueueOffline(userMessage);
+          const message = errorMessage(err);
+          setError(message);
+          const failedAssistant: ChatRecord = { ...assistantMessage, status: 'error', content: `请求失败：${message}`, agentEvents: assistantAgentEvents, plan: assistantPlan, approval: assistantApproval, taskId: assistantTaskId, citations: collectResearchCitations(assistantToolEvents, { now: new Date() }), updatedAt: now() };
         failedAssistant.toolEvents = assistantToolEvents;
         await put('messages', failedAssistant);
         setMessages((prev) => prev.map((item) => (item.id === assistantMessage.id ? failedAssistant : item)));
@@ -264,12 +318,12 @@ export default function App() {
     }
   }
 
-  async function createFirstSession(): Promise<string> {
+  async function createFirstSession(): Promise<Session> {
     const session: Session = { id: id('session'), title: '新会话', createdAt: now(), updatedAt: now() };
     await put('sessions', session);
     setSessions((prev) => [session, ...prev]);
     setActiveSessionId(session.id);
-    return session.id;
+    return session;
   }
 
   async function enqueueOffline(message: ChatRecord): Promise<void> {
@@ -280,7 +334,7 @@ export default function App() {
     const queue = await getAll<ChatRecord>('offlineQueue');
     for (const item of queue) {
       await remove('offlineQueue', item.id);
-      await send(item.content, item.id);
+      await send(item.content, item.id, item.documents);
     }
   }
 
@@ -292,6 +346,8 @@ export default function App() {
   }
 
   function stop() {
+    const activeTask = [...activeMessages].reverse().find((message) => message.role === 'assistant' && message.status === 'streaming' && message.taskId);
+    if (activeTask?.taskId) void cancelTask(activeTask.taskId).catch(() => undefined);
     abortRef.current?.abort();
   }
 
@@ -299,7 +355,7 @@ export default function App() {
     if (streaming || message.role !== 'assistant' || (message.status !== 'error' && message.status !== 'stopped')) return;
     const messageIndex = activeMessages.findIndex((item) => item.id === message.id);
     const source = activeMessages.slice(0, messageIndex).reverse().find((item) => item.role === 'user' && item.status === 'done');
-    if (source) await send(source.content);
+    if (source) await send(source.content, undefined, source.documents);
   }
 
   function selectAsset(result: AssetSearchResult): void {
@@ -338,6 +394,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <Sidebar
+        capabilities={capabilities}
         user={user}
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -421,13 +478,15 @@ export default function App() {
               financialSymbol={financialSymbol}
               messages={activeMessages}
               streaming={streaming}
+              approvalMode={reviewMode}
+              onReviewModeChange={setReviewMode}
               onSend={send}
               onStop={stop}
               onRetry={(message) => void retryMessage(message)}
             />
           </div>
         ) : (
-          <ChatWindow messages={activeMessages} streaming={streaming} financialMode={financialMode} onSend={send} onStop={stop} onRetry={(message) => void retryMessage(message)} />
+          <ChatWindow messages={activeMessages} streaming={streaming} financialMode={financialMode} approvalMode={reviewMode} onReviewModeChange={setReviewMode} onSend={send} onStop={stop} onRetry={(message) => void retryMessage(message)} />
         )}
       </section>
     </main>

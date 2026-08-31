@@ -104,3 +104,18 @@ test('SseEventWriter ends an active response only once', () => {
 
   assert.equal(response.endCount, 1);
 });
+
+test('SseEventWriter emits keep-alive comments and clears them on finish', async () => {
+  const { response, writer } = createWriter();
+  const heartbeatWriter = new SseEventWriter(response as never, { recordSseDisconnect() {} }, { heartbeatMs: 1 });
+
+  heartbeatWriter.open();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(response.writes.some((value) => value === ': keep-alive\n\n'), true);
+  heartbeatWriter.done();
+  const count = response.writes.length;
+  heartbeatWriter.finish();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(response.writes.length, count);
+  writer.finish();
+});

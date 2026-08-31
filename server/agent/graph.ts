@@ -5,11 +5,13 @@ import { AppError } from '../domain/errors/app-error.js';
 import type { DeepSeekSseEvent } from '../sse.js';
 import type { AgentSseEvent } from '../types.js';
 import type { AgentPlanSnapshot } from '../../shared/agent-events.js';
+import type { InMemoryApprovalCoordinator } from './approval-coordinator.js';
 import {
   AgentStateAnnotation,
   normalizePlan,
   type AssistantToolCall,
   type AgentGraphState,
+  type ApprovalWait,
   type PendingToolCall,
   type ToolFreshness,
   type ToolOutcomeSummary,
@@ -32,6 +34,7 @@ export interface OnlineAgentDependencies {
   model: ModelClient;
   tools: ToolExecutor;
   planner?: Planner;
+  approval?: InMemoryApprovalCoordinator;
 }
 
 function publish(state: typeof AgentStateAnnotation.State, event: AgentSseEvent): void {
@@ -356,6 +359,7 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       const stream = dependencies.model.stream({
         messages: messagesForModel(state),
         tools: state.forceFinalAnswer ? [] : dependencies.tools.definitions(),
+        taskType: state.taskType,
         forceFinalAnswer: state.forceFinalAnswer,
         responseFormat: state.responseFormat
       }, signal);
@@ -429,6 +433,68 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
     let toolCalls = state.toolCalls;
     let forceFinalAnswer = state.forceFinalAnswer;
     let hasInvalidToolCall = false;
+    let approvalWait: ApprovalWait | undefined = state.approvalWait;
+    if (!approvalWait && state.review === true && state.pendingCalls.length > 0 && dependencies.approval) {
+      const calls = state.pendingCalls.flatMap((call) => {
+        const complete = assistantToolCall(call);
+        return complete
+          ? [{
+            id: complete.id,
+            name: complete.function.name,
+            arguments: complete.function.arguments
+          }]
+          : [];
+      });
+      if (calls.length > 0) {
+        const handle = dependencies.approval.request(
+          calls,
+          () => state.now().getTime(),
+          state.signal
+        );
+        approvalWait = handle;
+        const approvalEvent: AgentSseEvent = {
+          type: 'approval',
+          id: handle.id,
+          calls
+        };
+        addEvent(approvalEvent);
+      }
+    }
+    if (approvalWait && state.review === true) {
+      const approvalResult = await approvalWait.wait;
+      if (state.signal?.aborted) return { finalized: true, terminated: true };
+      if (approvalResult.status !== 'approved') {
+        const approvalErrorCode = approvalResult.status === 'expired' ? 'approval_expired' : 'approval_rejected';
+        const rejectionEvents: AgentSseEvent[] = [];
+        for (const call of state.pendingCalls) {
+          const complete = assistantToolCall(call);
+          const name = complete?.function.name ?? 'invalid_tool_call';
+          rejectionEvents.push({ type: 'tool_result', id: complete?.id, name, ok: false, errorCode: approvalErrorCode });
+        }
+        for (const event of rejectionEvents) addEvent(event);
+        const messages = [...state.messages];
+        for (let index = 0; index < state.pendingCalls.length; index += 1) {
+          const pendingCall = state.pendingCalls[index];
+          if (!pendingCall) continue;
+          const call = assistantToolCall(pendingCall);
+          if (!call) continue;
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: JSON.stringify({ ok: false, name: call.function.name, errorCode: approvalErrorCode })
+          });
+        }
+        return {
+          events: rejectionEvents,
+          messages,
+          pendingCalls: [],
+          approvalWait: undefined,
+          forceFinalAnswer: true,
+          review: state.review,
+          resumeModelAfterTools: true
+        };
+      }
+    }
     const scheduled = state.pendingCalls.map((call) => {
       const complete = assistantToolCall(call);
       if (!complete) {
@@ -488,6 +554,7 @@ export function createOnlineAgentGraph(dependencies: OnlineAgentDependencies) {
       events,
       messages,
       pendingCalls: [],
+      approvalWait: undefined,
       toolCalls,
       toolRounds,
       currentStep,

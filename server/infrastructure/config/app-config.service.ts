@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { ModelTaskType } from '../../application/chat/chat.ports.js';
 
 const API_KEY_PLACEHOLDER = '在这里填写你的apikey';
 
@@ -14,8 +15,19 @@ export interface AppConfig {
     baseUrl: string;
     model: string;
   };
+  modelRoutes?: Partial<Record<ModelTaskType, ModelRouteConfig>>;
   pdfFontPath?: string;
+  ocrLanguage: string;
+  tesseractLangPath?: string;
+  tesseractWorkerPath?: string;
+  tesseractCorePath?: string;
   modelResilience: ModelResilienceConfig;
+}
+
+export interface ModelRouteConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
 }
 
 export interface ModelResilienceConfig {
@@ -72,6 +84,32 @@ function readAbsoluteFilePath(value: string | undefined, name: string): string |
   return value;
 }
 
+function readOcrLanguage(value: string | undefined): string {
+  const candidate = value || 'chi_sim+eng';
+  if (candidate.length > 64 || !/^[A-Za-z0-9_+.-]+$/u.test(candidate)) throw new Error('OCR_LANGUAGE must contain only language codes separated by +');
+  return candidate;
+}
+
+function readModelRoutes(environment: NodeJS.ProcessEnv): Partial<Record<ModelTaskType, ModelRouteConfig>> | undefined {
+  const routeNames: readonly [ModelTaskType, string][] = [
+    ['fast', 'FAST'],
+    ['reasoning', 'REASONING'],
+    ['structured', 'STRUCTURED']
+  ];
+  const routes: Partial<Record<ModelTaskType, ModelRouteConfig>> = {};
+  for (const [taskType, suffix] of routeNames) {
+    const apiKey = environment[`MODEL_${suffix}_API_KEY`];
+    const baseUrl = environment[`MODEL_${suffix}_BASE_URL`];
+    const model = environment[`MODEL_${suffix}_NAME`];
+    const configured = Boolean(apiKey || baseUrl || model);
+    if (!configured) continue;
+    if (!apiKey || !baseUrl || !model) throw new Error(`MODEL_${suffix}_API_KEY, MODEL_${suffix}_BASE_URL, and MODEL_${suffix}_NAME must be configured together`);
+    if (apiKey === API_KEY_PLACEHOLDER) throw new Error(`MODEL_${suffix}_API_KEY must not use the placeholder value`);
+    routes[taskType] = { apiKey, baseUrl: readHttpOrigin(baseUrl, '', `MODEL_${suffix}_BASE_URL`), model };
+  }
+  return Object.keys(routes).length > 0 ? routes : undefined;
+}
+
 export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const deepSeekApiKey = environment.DEEPSEEK_API_KEY;
   const fallbackApiKey = environment.MODEL_FALLBACK_API_KEY;
@@ -79,6 +117,11 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const fallbackModel = environment.MODEL_FALLBACK_NAME;
   const hasFallbackConfiguration = Boolean(fallbackApiKey || fallbackBaseUrl || fallbackModel);
   const pdfFontPath = readAbsoluteFilePath(environment.PDF_CJK_FONT_PATH, 'PDF_CJK_FONT_PATH');
+  const ocrLanguage = readOcrLanguage(environment.OCR_LANGUAGE);
+  const tesseractLangPath = readAbsoluteFilePath(environment.TESSERACT_LANG_PATH, 'TESSERACT_LANG_PATH');
+  const tesseractWorkerPath = readAbsoluteFilePath(environment.TESSERACT_WORKER_PATH, 'TESSERACT_WORKER_PATH');
+  const tesseractCorePath = readAbsoluteFilePath(environment.TESSERACT_CORE_PATH, 'TESSERACT_CORE_PATH');
+  const modelRoutes = readModelRoutes(environment);
   if (deepSeekApiKey === API_KEY_PLACEHOLDER) throw new Error('DEEPSEEK_API_KEY must not use the placeholder value');
   if (hasFallbackConfiguration && (!fallbackApiKey || !fallbackBaseUrl || !fallbackModel)) {
     throw new Error('MODEL_FALLBACK_API_KEY, MODEL_FALLBACK_BASE_URL, and MODEL_FALLBACK_NAME must be configured together');
@@ -101,7 +144,12 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
         }
       }
       : {}),
+    ...(modelRoutes ? { modelRoutes } : {}),
     ...(pdfFontPath ? { pdfFontPath } : {}),
+    ocrLanguage,
+    ...(tesseractLangPath ? { tesseractLangPath } : {}),
+    ...(tesseractWorkerPath ? { tesseractWorkerPath } : {}),
+    ...(tesseractCorePath ? { tesseractCorePath } : {}),
     modelResilience: {
       totalTimeoutMs: readBoundedInteger(environment.MODEL_TOTAL_TIMEOUT_MS, 60000, 'MODEL_TOTAL_TIMEOUT_MS', 100, 120000),
       firstEventTimeoutMs: readBoundedInteger(environment.MODEL_FIRST_EVENT_TIMEOUT_MS, 15000, 'MODEL_FIRST_EVENT_TIMEOUT_MS', 100, 120000),

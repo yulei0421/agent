@@ -26,6 +26,7 @@ export class ModelPlanner {
           { role: 'user', content: goal }
         ],
         tools: [],
+        taskType: 'reasoning',
         responseFormat: { type: 'json_object' }
       }, activeSignal)) {
         if (activeSignal.aborted) throw new AppError('request_aborted');

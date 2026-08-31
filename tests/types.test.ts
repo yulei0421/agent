@@ -14,8 +14,16 @@ test('shared agent event types validate the SSE contract', () => {
 
   assert.equal(isAgentSseEvent(event), true);
   assert.equal(isAgentSseEvent(plan), true);
+  assert.equal(isAgentSseEvent({ type: 'task', id: 'A'.repeat(32), status: 'running' }), true);
+  assert.equal(isAgentSseEvent({ type: 'task', id: 'bad', status: 'running' }), false);
   assert.equal(isAgentSseEvent({ type: 'agent', role: 'researcher', status: 'started' }), true);
   assert.equal(isAgentSseEvent({ type: 'agent', role: 'unknown', status: 'started' }), false);
+  assert.equal(isAgentSseEvent({
+    type: 'approval',
+    id: 'approval_abc123',
+    calls: [{ name: 'get_weather', arguments: '{"city":"上海"}' }]
+  }), true);
+  assert.equal(isAgentSseEvent({ type: 'approval', id: 'x', calls: [{ name: '', arguments: '' }] }), false);
   assert.equal(isAgentSseEvent({ ...plan, currentStep: -1 }), false);
   assert.equal(result.ok, false);
 });

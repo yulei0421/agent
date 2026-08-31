@@ -2,7 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import { useState } from 'react';
 import { downloadResearchReport, type ResearchDocumentFormat } from '../lib/research-export.js';
 import { AgentPlan } from './AgentPlan.js';
-import type { ChatRecord, ToolEvent } from '../types.js';
+import type { ApprovalEvent, ChatRecord, ToolEvent } from '../types.js';
 
 type UnknownRecord = Record<string, unknown>;
 type TechnicalIndicators = {
@@ -100,6 +100,38 @@ function eventRecords(events: readonly ToolEvent[] | undefined): readonly ToolEv
   return events ?? [];
 }
 
+function ApprovalCard({ approval }: { approval: ApprovalEvent }) {
+  const [decision, setDecision] = useState<'pending' | 'approved' | 'rejected' | 'error'>('pending');
+  const [error, setError] = useState('');
+
+  async function decide(next: 'approved' | 'rejected'): Promise<void> {
+    if (decision !== 'pending') return;
+    setError('');
+    try {
+      const response = await fetch('/api/approvals/' + encodeURIComponent(approval.id) + '/' + next, { method: 'POST' });
+      if (!response.ok) {
+        const payload = await response.json().catch((): { errorCode?: unknown } => ({})) as { errorCode?: unknown };
+        throw new Error(typeof payload.errorCode === 'string' ? payload.errorCode : '审批失败：' + response.status);
+      }
+      setDecision(next);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '审批失败');
+      setDecision('error');
+    }
+  }
+
+  return <section className="approval-card" aria-label="工具执行审批">
+    <header><h3>等待工具审批</h3><span>{decision === 'pending' ? '待处理' : decision === 'approved' ? '已批准' : decision === 'rejected' ? '已拒绝' : '审批失败'}</span></header>
+    <p>模型准备调用以下只读工具：</p>
+    <ul>{approval.calls.map((call, index) => <li key={[call.name, call.id ?? index].join('-')}>{toolLabel(call.name)}</li>)}</ul>
+    {decision === 'pending' ? <div className="approval-actions">
+      <button type="button" onClick={() => void decide('approved')}>批准</button>
+      <button type="button" onClick={() => void decide('rejected')}>拒绝</button>
+    </div> : <p className="approval-status">{decision === 'approved' ? '已批准，Agent 将继续执行。' : decision === 'rejected' ? '已拒绝，Agent 将基于当前上下文回答。' : '审批请求未完成，请重试本轮对话。'}</p>}
+    {error && <p className="research-export-error" role="alert">{error}</p>}
+  </section>;
+}
+
 function ResearchReportCard({ report }: { report: NonNullable<ChatRecord['researchReport']> }) {
   const [downloading, setDownloading] = useState<ResearchDocumentFormat | null>(null);
   const [error, setError] = useState('');
@@ -153,9 +185,19 @@ export function MessageItem({ message, streaming, onRetry }: { message: ChatReco
       <div className="message-meta">
         <span>{message.role}</span>
         <span>{message.status}</span>
+        {message.taskId && <span>任务 {message.taskId.slice(0, 8)}</span>}
         {isStreamingAssistant && <span className="streaming-label">生成中</span>}
       </div>
       {message.role === 'assistant' && <AgentPlan plan={message.plan} />}
+      {message.role === 'assistant' && message.approval && <ApprovalCard approval={message.approval} />}
+      {message.role === 'assistant' && message.citations && message.citations.length > 0 && (
+        <section className="citation-ledger" aria-label="引用账本">
+          <h3>引用账本</h3>
+          <ul>{message.citations.map((citation) => (
+            <li key={citation.id}><strong>{citation.id}</strong><span>{citation.label}</span>{citation.freshness && <em>{citation.expired ? '已过期' : citation.freshness === 'fresh' ? '新鲜' : '未知新鲜度'}</em>}</li>
+          ))}</ul>
+        </section>
+      )}
       {message.role === 'assistant' && (message.status === 'error' || message.status === 'stopped') && onRetry && (
         <button className="message-retry" type="button" onClick={onRetry}>重新生成</button>
       )}

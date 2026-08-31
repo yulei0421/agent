@@ -106,6 +106,32 @@ test('passes the JSON-object constraint only for validated financial research re
   assert.equal((requests[1] as { responseFormat?: unknown }).responseFormat, undefined);
 });
 
+test('passes review mode only when the client explicitly enables it', async () => {
+  const requests: unknown[] = [];
+  const service = new ChatApplicationService({ runner: { async run(request) { requests.push(request); return [{ type: 'done' }]; } } });
+
+  await service.run({ messages: [{ role: 'user', content: '需要审批' }], review: true });
+  await service.run({ messages: [{ role: 'user', content: '自动执行' }], review: false });
+
+  assert.equal((requests[0] as { review?: unknown }).review, true);
+  assert.equal((requests[1] as { review?: unknown }).review, false);
+});
+
+test('validates document summaries at the application boundary and forwards safe text as user context', async () => {
+  const requests: unknown[] = [];
+  const service = new ChatApplicationService({ runner: { async run(request) { requests.push(request); return [{ type: 'done' }]; } } });
+  await service.run({
+    messages: [{ role: 'user', content: '总结附件' }],
+    documents: [{ name: 'notes.md', mimeType: 'text/markdown', text: '风险摘要' }]
+  });
+  const messages = (requests[0] as { messages: readonly { role: string; content?: string }[] }).messages;
+  assert.deepEqual(messages.at(-2), { role: 'user', content: '附件《notes.md》：\n风险摘要' });
+  await assert.rejects(
+    () => service.run({ messages: [{ role: 'user', content: 'x' }], documents: [{ name: 'x.pdf', mimeType: 'application/pdf', text: 'x' }] }),
+    { code: 'invalid_request' }
+  );
+});
+
 async function completeWithin<T>(operation: Promise<T>, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

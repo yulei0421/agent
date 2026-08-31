@@ -34,3 +34,20 @@ test('collects safe citation ids and provider sources from successful tool resul
     { id: 'yahoo-finance', label: 'AAPL.US', observedAt: '2026-08-18T01:00:00.000Z' }
   ]);
 });
+
+test('marks citations stale using server-observed age metadata when requested', () => {
+  const citations = collectResearchCitations([
+    {
+      type: 'tool_result',
+      name: 'get_quote',
+      ok: true,
+      result: { meta: { source: 'yahoo-finance', symbol: 'AAPL.US', ageSeconds: 7200 } }
+    }
+  ], { now: new Date('2026-08-18T03:00:00.000Z') });
+  assert.deepEqual(citations, [{
+    id: 'yahoo-finance',
+    label: 'AAPL.US',
+    freshness: 'stale',
+    expired: true
+  }]);
+});

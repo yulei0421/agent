@@ -8,15 +8,18 @@ export class SseEventWriter {
   private opened = false;
   private finished = false;
   private doneWritten = false;
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   private readonly onClose = () => {
     this.closed = true;
+    this.clearHeartbeat();
     this.telemetry.recordSseDisconnect();
   };
 
   constructor(
     private readonly response: Response,
-    private readonly telemetry: Pick<RuntimeTelemetry, 'recordSseDisconnect'>
+    private readonly telemetry: Pick<RuntimeTelemetry, 'recordSseDisconnect'>,
+    private readonly options: { heartbeatMs?: number } = {}
   ) {}
 
   open(): void {
@@ -28,6 +31,17 @@ export class SseEventWriter {
     this.response.setHeader('Connection', 'keep-alive');
     this.response.flushHeaders();
     this.response.once('close', this.onClose);
+    const heartbeatMs = this.options.heartbeatMs ?? 0;
+    if (heartbeatMs > 0) {
+      this.heartbeatTimer = setInterval(() => {
+        if (!this.canWrite()) {
+          this.clearHeartbeat();
+          return;
+        }
+        this.response.write(': keep-alive\n\n');
+      }, heartbeatMs);
+      this.heartbeatTimer.unref?.();
+    }
   }
 
   write(event: AgentSseEvent): void {
@@ -50,6 +64,7 @@ export class SseEventWriter {
   finish(): void {
     if (this.finished) return;
     this.finished = true;
+    this.clearHeartbeat();
     this.response.off('close', this.onClose);
     if (!this.doneWritten && !this.closed && !this.response.writableEnded) this.done();
     if (!this.response.writableEnded) this.response.end();
@@ -57,5 +72,11 @@ export class SseEventWriter {
 
   private canWrite(): boolean {
     return !this.closed && !this.response.writableEnded;
+  }
+
+  private clearHeartbeat(): void {
+    if (!this.heartbeatTimer) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
   }
 }

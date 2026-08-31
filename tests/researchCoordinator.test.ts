@@ -34,10 +34,10 @@ test('runs bounded research and risk delegates in parallel and returns server-ow
   assert.match(result.messages[0]?.content ?? '', /researcher/);
   assert.match(result.messages[1]?.content ?? '', /risk_reviewer/);
   assert.deepEqual(events, [
-    { type: 'agent', role: 'researcher', status: 'started' },
-    { type: 'agent', role: 'risk_reviewer', status: 'started' },
-    { type: 'agent', role: 'researcher', status: 'completed' },
-    { type: 'agent', role: 'risk_reviewer', status: 'completed' }
+    { type: 'agent', role: 'researcher', status: 'started', budget: { maxItems: 4, timeoutMs: 15_000 } },
+    { type: 'agent', role: 'risk_reviewer', status: 'started', budget: { maxItems: 4, timeoutMs: 15_000 } },
+    { type: 'agent', role: 'researcher', status: 'completed', budget: { maxItems: 4, timeoutMs: 15_000, usedItems: 2 } },
+    { type: 'agent', role: 'risk_reviewer', status: 'completed', budget: { maxItems: 4, timeoutMs: 15_000, usedItems: 2 } }
   ]);
 });
 

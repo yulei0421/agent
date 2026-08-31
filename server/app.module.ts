@@ -1,5 +1,6 @@
 import { Module, type DynamicModule, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
 import { ChatController } from './api/chat/chat.controller.js';
+import { ApprovalController } from './api/approval/approval.controller.js';
 import { ExportController } from './api/export/export.controller.js';
 import { HealthController } from './api/health/health.controller.js';
 import { MetricsController } from './api/health/metrics.controller.js';
@@ -19,17 +20,28 @@ import { FailoverModelClient } from './infrastructure/deepseek/failover-model-cl
 import { ModelPlanner } from './infrastructure/deepseek/model-planner.js';
 import { ResilientModelClient } from './infrastructure/deepseek/resilient-model-client.js';
 import { UnavailableModelClient } from './infrastructure/deepseek/unavailable-model-client.js';
+import { ModelRouter } from './infrastructure/deepseek/model-router.js';
 import { AppLoggerService } from './infrastructure/logging/app-logger.service.js';
 import { RuntimeTelemetry } from './infrastructure/runtime/runtime-telemetry.js';
 import { InstrumentedToolExecutor } from './infrastructure/runtime/instrumented-tool-executor.js';
 import { ResearchDocumentRenderer } from './infrastructure/export/research-document-renderer.js';
+import { InMemoryResearchDownloadStore } from './infrastructure/export/research-download.store.js';
 import { createToolRegistryExecutor } from './infrastructure/tools/tool-registry.adapter.js';
 import { ResearchCoordinator } from './agent/research-coordinator.js';
+import { SubAgentRegistry } from './agent/sub-agent-registry.js';
+import { InMemoryApprovalCoordinator } from './agent/approval-coordinator.js';
+import { CapabilitiesController } from './api/capabilities/capabilities.controller.js';
+import { TaskController } from './api/tasks/task.controller.js';
+import { DocumentsController } from './api/documents/documents.controller.js';
+import { CapabilityRegistry } from './application/capabilities/capability.registry.js';
+import { DocumentIngestionService } from './application/documents/document-ingestion.service.js';
+import { InMemoryTaskRuntime } from './application/tasks/task-runtime.js';
 import { createEconomicCalendarGateway } from './economic-calendar/gateway.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
 import { resolveLiveContext } from './tools/live.js';
 import { searchWeb } from './tools/web.js';
+import { PdfOcrDocumentExtractor } from './infrastructure/documents/document-extractor.js';
 
 const ASSET_SEARCH = Symbol('ASSET_SEARCH');
 
@@ -43,9 +55,24 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: [AppConfigModule.forRoot(environment)],
-      controllers: [HealthController, MetricsController, MarketController, ChatController, ExportController],
+      controllers: [HealthController, MetricsController, MarketController, ChatController, ApprovalController, ExportController, CapabilitiesController, TaskController, DocumentsController],
       providers: [
         AppLoggerService,
+        CapabilityRegistry,
+        InMemoryTaskRuntime,
+        InMemoryResearchDownloadStore,
+        {
+          provide: DocumentIngestionService,
+          inject: [AppConfigService],
+          useFactory: (config: AppConfigService) => new DocumentIngestionService(new PdfOcrDocumentExtractor({
+            ocrLanguage: config.value.ocrLanguage,
+            ...(config.value.tesseractLangPath ? { ocrLangPath: config.value.tesseractLangPath } : {}),
+            ...(config.value.tesseractWorkerPath ? { ocrWorkerPath: config.value.tesseractWorkerPath } : {}),
+            ...(config.value.tesseractCorePath ? { ocrCorePath: config.value.tesseractCorePath } : {})
+          }))
+        },
+        InMemoryApprovalCoordinator,
+        SubAgentRegistry,
         StatusGateway,
         RuntimeTelemetry,
         { provide: ASSET_SEARCH, useFactory: () => createAssetSearch() },
@@ -60,7 +87,8 @@ export class AppModule implements NestModule {
           useFactory: (config: AppConfigService, telemetry: RuntimeTelemetry): ModelClient => {
             const primaryConfigured = Boolean(config.value.deepSeekApiKey);
             const fallback = config.value.modelFallback;
-            telemetry.setModelConfigured(primaryConfigured || Boolean(fallback));
+            const routeConfigs = config.value.modelRoutes ?? {};
+            telemetry.setModelConfigured(primaryConfigured || Boolean(fallback) || Object.keys(routeConfigs).length > 0);
 
             const createResilientClient = (apiKey: string, baseUrl: string, model: string): ModelClient => new ResilientModelClient(
               new DeepSeekClient({ apiKey, baseUrl, model }),
@@ -71,10 +99,18 @@ export class AppModule implements NestModule {
             const primary = primaryConfigured
               ? createResilientClient(config.value.deepSeekApiKey!, config.value.deepSeekBaseUrl, config.value.deepSeekModel)
               : new ResilientModelClient(new UnavailableModelClient(), telemetry, config.value.modelResilience);
-            if (!fallback) return primary;
-
-            const secondary = createResilientClient(fallback.apiKey, fallback.baseUrl, fallback.model);
-            return new FailoverModelClient(primary, secondary, () => telemetry.recordModelFailover());
+            const defaultClient = fallback
+              ? new FailoverModelClient(
+                primary,
+                createResilientClient(fallback.apiKey, fallback.baseUrl, fallback.model),
+                () => telemetry.recordModelFailover()
+              )
+              : primary;
+            const routes = Object.fromEntries(Object.entries(routeConfigs).map(([taskType, route]) => {
+              const routeClient = createResilientClient(route!.apiKey, route!.baseUrl, route!.model);
+              return [taskType, new FailoverModelClient(routeClient, defaultClient, () => telemetry.recordModelFailover())];
+            }));
+            return Object.keys(routes).length > 0 ? new ModelRouter(defaultClient, routes) : defaultClient;
           }
         },
         {
@@ -101,12 +137,13 @@ export class AppModule implements NestModule {
         },
         {
           provide: AGENT_RUNNER,
-          inject: [MODEL_CLIENT, TOOL_EXECUTOR, PLANNER],
-          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner): AgentRunner => new LangGraphAgentRunner({
+          inject: [MODEL_CLIENT, TOOL_EXECUTOR, PLANNER, InMemoryApprovalCoordinator, SubAgentRegistry],
+          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner, approval: InMemoryApprovalCoordinator, subAgents: SubAgentRegistry): AgentRunner => new LangGraphAgentRunner({
             model,
             tools,
             planner,
-            coordinator: new ResearchCoordinator(model)
+            coordinator: new ResearchCoordinator(model, subAgents),
+            approval
           })
         },
         {

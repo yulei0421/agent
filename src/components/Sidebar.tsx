@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { LocalUser, Session } from '../types.js';
+import type { PublicCapability } from '../lib/capabilities.js';
 
 function formatHistoryTime(timestamp: string): string {
   const value = new Date(timestamp);
@@ -28,6 +29,7 @@ function ConversationIcon() {
 interface SidebarProps {
   user: LocalUser;
   sessions: readonly Session[];
+  capabilities: readonly PublicCapability[];
   activeSessionId: string;
   financialMode: boolean;
   onFinancialMode(): void;
@@ -38,9 +40,11 @@ interface SidebarProps {
   onClear(): void | Promise<void>;
 }
 
-export function Sidebar({ user, sessions, activeSessionId, financialMode, onFinancialMode, onCreate, onSelect, onDelete, onLogout, onClear }: SidebarProps) {
+export function Sidebar({ user, sessions, capabilities, activeSessionId, financialMode, onFinancialMode, onCreate, onSelect, onDelete, onLogout, onClear }: SidebarProps) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [capabilitiesExpanded, setCapabilitiesExpanded] = useState(false);
   const visibleSessions = historyExpanded ? sessions : sessions.slice(0, 5);
+  const visibleCapabilities = capabilitiesExpanded ? capabilities : capabilities.slice(0, 5);
 
   return (
     <aside className="sidebar">
@@ -82,6 +86,18 @@ export function Sidebar({ user, sessions, activeSessionId, financialMode, onFina
           </button>
         )}
       </nav>
+      <section className="capability-panel" aria-label="Agent 能力清单">
+        <button className="capability-panel-toggle" type="button" onClick={() => setCapabilitiesExpanded((expanded) => !expanded)} aria-expanded={capabilitiesExpanded}>
+          <span>Agent 能力</span><span>{capabilities.length || '—'}</span>
+        </button>
+        {capabilities.length > 0 && <ul>
+          {visibleCapabilities.map((capability) => <li key={capability.name}>
+            <span><strong>{capability.name}</strong><small>{capability.description}</small></span>
+            <em>{capability.kind === 'tool' ? '工具' : capability.kind === 'agent' ? '角色' : '模型'}</em>
+          </li>)}
+        </ul>}
+        {capabilities.length > 5 && <button className="capability-more" type="button" onClick={() => setCapabilitiesExpanded((expanded) => !expanded)}>{capabilitiesExpanded ? '收起能力' : `查看全部 ${capabilities.length} 项`}</button>}
+      </section>
       <div className="sidebar-footer">
         <button onClick={onClear}>清空历史</button>
         <button onClick={onLogout}>退出</button>

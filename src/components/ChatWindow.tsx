@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { MessageList } from './MessageList.js';
-import { normalizeTextAttachment, type TextAttachment } from '../lib/attachments.js';
+import { ingestBinaryAttachment, normalizeTextAttachment, toChatDocument, type ChatDocument, type TextAttachment } from '../lib/attachments.js';
 import type { ChatRecord } from '../types.js';
 
 interface ChatWindowProps {
@@ -8,14 +8,17 @@ interface ChatWindowProps {
   streaming: boolean;
   financialMode: boolean;
   financialSymbol?: string;
-  onSend(content: string, queuedId?: string): void | Promise<void>;
+  approvalMode: boolean;
+  onReviewModeChange(value: boolean): void;
+  onSend(content: string, queuedId?: string, documents?: readonly ChatDocument[]): void | Promise<void>;
   onStop(): void;
   onRetry?(message: ChatRecord): void;
 }
 
-export function ChatWindow({ messages, streaming, financialMode, financialSymbol, onSend, onStop, onRetry }: ChatWindowProps) {
+export function ChatWindow({ messages, streaming, financialMode, financialSymbol, approvalMode, onReviewModeChange, onSend, onStop, onRetry }: ChatWindowProps) {
   const [content, setContent] = useState('');
-  const [attachment, setAttachment] = useState<TextAttachment | null>(null);
+  const [attachment, setAttachment] = useState<TextAttachment | ChatDocument | null>(null);
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
   const [attachmentError, setAttachmentError] = useState('');
   const placeholder = financialMode
     ? '输入金融问题和显式代码，例如 600519.SH、0700.HK、AAPL、BTC/USDT'
@@ -34,13 +37,11 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
       <form className="composer" onSubmit={(event) => {
         event.preventDefault();
         const value = content.trim();
-        if (!value || streaming) return;
+        if (!value || streaming || attachmentLoading) return;
         setContent('');
-        const prompt = attachment
-          ? `${value}\n\n附件《${attachment.name}》：\n${attachment.content}`
-          : value;
+        const documents = attachment ? ['content' in attachment ? toChatDocument(attachment) : attachment] : undefined;
         setAttachment(null);
-        onSend(prompt);
+        onSend(value, undefined, documents);
       }}>
         <textarea
           aria-label={financialMode ? '金融对话输入' : '聊天输入'}
@@ -57,38 +58,57 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
           <span className="web-search-toggle">模型工具</span>
           <p>模型会在需要时调用受限工具；每次调用及结果都会显示在回答下方。</p>
         </div>
+        <label className="approval-toggle">
+          <input type="checkbox" checked={approvalMode} disabled={streaming} onChange={(event) => onReviewModeChange(event.target.checked)} />
+          <span>人工审批工具调用</span>
+          <small>开启后，执行工具前会暂停等待你的批准。</small>
+        </label>
         <div className="composer-attachment">
           <label className="attachment-picker">
-            <span>添加文本附件</span>
+            <span>添加文本附件 / PDF / 图片</span>
             <input
-              accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json"
-              aria-label="添加文本附件"
+              accept=".txt,.md,.csv,.json,.pdf,.png,.jpg,.jpeg,.webp,text/plain,text/markdown,text/csv,application/json,application/pdf,image/png,image/jpeg,image/webp"
+              aria-label="添加聊天附件"
               disabled={streaming}
               onChange={async (event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = '';
                 setAttachmentError('');
                 if (!file) return;
-                const next = normalizeTextAttachment(file.name, await file.text());
-                if (!next) {
-                  setAttachmentError('仅支持非空 TXT、MD、CSV、JSON 文件，且内容不超过 3500 个字符。');
+                const isText = /\.(?:txt|md|markdown|csv|json)$/iu.test(file.name);
+                if (isText) {
+                  const next = normalizeTextAttachment(file.name, await file.text());
+                  if (!next) {
+                    setAttachmentError('仅支持非空 TXT、MD、CSV、JSON 文件，且内容不超过 3500 个字符。');
+                    return;
+                  }
+                  setAttachment(next);
                   return;
                 }
-                setAttachment(next);
+                setAttachmentLoading(true);
+                try {
+                  setAttachment(await ingestBinaryAttachment(file));
+                } catch (error) {
+                  setAttachmentError(error instanceof Error ? error.message : '附件解析失败');
+                } finally {
+                  setAttachmentLoading(false);
+                }
               }}
               type="file"
             />
           </label>
-          {attachment && (
+          {attachmentLoading && <span className="attachment-loading">正在解析附件...</span>}
+          {attachment && !attachmentLoading && (
             <button className="attachment-chip" type="button" onClick={() => setAttachment(null)} disabled={streaming}>
               {attachment.name} ×
             </button>
           )}
           {attachmentError && <span className="attachment-error" role="alert">{attachmentError}</span>}
         </div>
+        <p className="composer-context-note">当前会话会保留有限本地工作记忆；历史文本附件会按问题在浏览器本地召回相关片段。</p>
         <div className="composer-actions">
           <button type="button" onClick={onStop} disabled={!streaming}>停止生成</button>
-          <button type="submit" disabled={streaming || !content.trim()}>发送</button>
+          <button type="submit" disabled={streaming || attachmentLoading || !content.trim()}>发送</button>
         </div>
       </form>
     </section>
