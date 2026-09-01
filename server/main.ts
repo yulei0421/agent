@@ -1,10 +1,11 @@
 import 'reflect-metadata';
-import { json } from 'express';
+import { json, static as serveStatic } from 'express';
 import { NestFactory } from '@nestjs/core';
 import type { INestApplication } from '@nestjs/common';
 import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module.js';
 import { parseAppConfig } from './infrastructure/config/app-config.service.js';
+import { createDesktopSessionGuard } from './api/desktop-session.middleware.js';
 
 export async function createApp(environment: NodeJS.ProcessEnv = process.env): Promise<INestApplication> {
   const config = parseAppConfig(environment);
@@ -28,6 +29,8 @@ export async function createApp(environment: NodeJS.ProcessEnv = process.env): P
     allowedHeaders: ['Content-Type'],
     methods: ['GET', 'POST', 'OPTIONS']
   });
+  if (config.desktopSessionToken) app.use('/api', createDesktopSessionGuard(config.desktopSessionToken));
+  if (config.staticRendererDir) app.use(serveStatic(config.staticRendererDir, { index: 'index.html', fallthrough: true }));
   if (config.trustProxy) app.getHttpAdapter().getInstance().set('trust proxy', 1);
   return app;
 }

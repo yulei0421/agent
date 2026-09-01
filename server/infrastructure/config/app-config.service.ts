@@ -21,6 +21,8 @@ export interface AppConfig {
   tesseractLangPath?: string;
   tesseractWorkerPath?: string;
   tesseractCorePath?: string;
+  desktopSessionToken?: string;
+  staticRendererDir?: string;
   modelResilience: ModelResilienceConfig;
 }
 
@@ -90,6 +92,12 @@ function readOcrLanguage(value: string | undefined): string {
   return candidate;
 }
 
+function readDesktopSessionToken(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (!/^[A-Za-z0-9_-]{24,256}$/u.test(value)) throw new Error('DESKTOP_SESSION_TOKEN must be a base64url token between 24 and 256 characters');
+  return value;
+}
+
 function readModelRoutes(environment: NodeJS.ProcessEnv): Partial<Record<ModelTaskType, ModelRouteConfig>> | undefined {
   const routeNames: readonly [ModelTaskType, string][] = [
     ['fast', 'FAST'],
@@ -121,6 +129,9 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const tesseractLangPath = readAbsoluteFilePath(environment.TESSERACT_LANG_PATH, 'TESSERACT_LANG_PATH');
   const tesseractWorkerPath = readAbsoluteFilePath(environment.TESSERACT_WORKER_PATH, 'TESSERACT_WORKER_PATH');
   const tesseractCorePath = readAbsoluteFilePath(environment.TESSERACT_CORE_PATH, 'TESSERACT_CORE_PATH');
+  const desktopSessionToken = readDesktopSessionToken(environment.DESKTOP_SESSION_TOKEN);
+  const staticRendererDir = readAbsoluteFilePath(environment.STATIC_RENDERER_DIR, 'STATIC_RENDERER_DIR');
+  if (Boolean(desktopSessionToken) !== Boolean(staticRendererDir)) throw new Error('DESKTOP_SESSION_TOKEN and STATIC_RENDERER_DIR must be configured together');
   const modelRoutes = readModelRoutes(environment);
   if (deepSeekApiKey === API_KEY_PLACEHOLDER) throw new Error('DEEPSEEK_API_KEY must not use the placeholder value');
   if (hasFallbackConfiguration && (!fallbackApiKey || !fallbackBaseUrl || !fallbackModel)) {
@@ -150,6 +161,8 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ...(tesseractLangPath ? { tesseractLangPath } : {}),
     ...(tesseractWorkerPath ? { tesseractWorkerPath } : {}),
     ...(tesseractCorePath ? { tesseractCorePath } : {}),
+    ...(desktopSessionToken ? { desktopSessionToken } : {}),
+    ...(staticRendererDir ? { staticRendererDir } : {}),
     modelResilience: {
       totalTimeoutMs: readBoundedInteger(environment.MODEL_TOTAL_TIMEOUT_MS, 60000, 'MODEL_TOTAL_TIMEOUT_MS', 100, 120000),
       firstEventTimeoutMs: readBoundedInteger(environment.MODEL_FIRST_EVENT_TIMEOUT_MS, 15000, 'MODEL_FIRST_EVENT_TIMEOUT_MS', 100, 120000),
