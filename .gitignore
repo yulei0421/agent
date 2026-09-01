@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist-electron/
+dist-server/
+release/
 .superpowers/
 .env
 .env.*
