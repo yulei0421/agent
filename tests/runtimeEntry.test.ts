@@ -15,7 +15,7 @@ test('production scripts start the Nest runtime instead of the legacy Express en
 test('the executable bootstrap loads local environment configuration before starting Nest', async () => {
   const source = await readFile(new URL('../server/bootstrap.ts', import.meta.url), 'utf8');
 
-  assert.match(source, /loadEnv\(\)/);
+  assert.match(source, /loadConfiguredEnv\(\)/);
   assert.match(source, /bootstrap\(\)/);
 });
 

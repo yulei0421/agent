@@ -21,6 +21,7 @@ import { ModelPlanner } from './infrastructure/deepseek/model-planner.js';
 import { ResilientModelClient } from './infrastructure/deepseek/resilient-model-client.js';
 import { UnavailableModelClient } from './infrastructure/deepseek/unavailable-model-client.js';
 import { ModelRouter } from './infrastructure/deepseek/model-router.js';
+import { ModelRegistry } from './infrastructure/deepseek/model-registry.js';
 import { AppLoggerService } from './infrastructure/logging/app-logger.service.js';
 import { RuntimeTelemetry } from './infrastructure/runtime/runtime-telemetry.js';
 import { InstrumentedToolExecutor } from './infrastructure/runtime/instrumented-tool-executor.js';
@@ -33,15 +34,24 @@ import { InMemoryApprovalCoordinator } from './agent/approval-coordinator.js';
 import { CapabilitiesController } from './api/capabilities/capabilities.controller.js';
 import { TaskController } from './api/tasks/task.controller.js';
 import { DocumentsController } from './api/documents/documents.controller.js';
+import { CitationsController } from './api/citations/citations.controller.js';
+import { BrowserController } from './api/browser/browser.controller.js';
 import { CapabilityRegistry } from './application/capabilities/capability.registry.js';
 import { DocumentIngestionService } from './application/documents/document-ingestion.service.js';
 import { InMemoryTaskRuntime } from './application/tasks/task-runtime.js';
+import { TaskNotificationService } from './application/tasks/task-notification.service.js';
+import { BackgroundTaskService } from './application/tasks/background-task.service.js';
 import { createEconomicCalendarGateway } from './economic-calendar/gateway.js';
 import { createMarketGateway } from './market/gateway.js';
 import { createAssetSearch } from './market/search.js';
 import { resolveLiveContext } from './tools/live.js';
 import { searchWeb } from './tools/web.js';
 import { PdfOcrDocumentExtractor } from './infrastructure/documents/document-extractor.js';
+import { CitationProxyService } from './application/citations/citation-proxy.service.js';
+import { SandboxBrowserExecutor } from './browser/browser-executor.js';
+import { BrowserPolicy } from './browser/browser-policy.js';
+import { HttpEmbeddingProvider } from './infrastructure/documents/embedding-provider.js';
+import { HashEmbeddingProvider } from './application/chat/document-retrieval.js';
 
 const ASSET_SEARCH = Symbol('ASSET_SEARCH');
 
@@ -55,7 +65,7 @@ export class AppModule implements NestModule {
     return {
       module: AppModule,
       imports: [AppConfigModule.forRoot(environment)],
-      controllers: [HealthController, MetricsController, MarketController, ChatController, ApprovalController, ExportController, CapabilitiesController, TaskController, DocumentsController],
+      controllers: [HealthController, MetricsController, MarketController, ChatController, ApprovalController, ExportController, CapabilitiesController, TaskController, DocumentsController, CitationsController, BrowserController],
       providers: [
         AppLoggerService,
         {
@@ -63,8 +73,23 @@ export class AppModule implements NestModule {
           useFactory: () => new CapabilityRegistry()
         },
         {
+          provide: CitationProxyService,
+          useFactory: () => new CitationProxyService()
+        },
+        {
           provide: InMemoryTaskRuntime,
           useFactory: () => new InMemoryTaskRuntime()
+        },
+        TaskNotificationService,
+        BackgroundTaskService,
+        {
+          provide: SandboxBrowserExecutor,
+          inject: [AppConfigService],
+          useFactory: (config: AppConfigService) => new SandboxBrowserExecutor({
+            policy: new BrowserPolicy({
+              allowedDomains: config.value.browserAllowedDomains ?? []
+            })
+          })
         },
         {
           provide: InMemoryResearchDownloadStore,
@@ -125,7 +150,22 @@ export class AppModule implements NestModule {
               const routeClient = createResilientClient(route!.apiKey, route!.baseUrl, route!.model);
               return [taskType, new FailoverModelClient(routeClient, defaultClient, () => telemetry.recordModelFailover())];
             }));
-            return Object.keys(routes).length > 0 ? new ModelRouter(defaultClient, routes) : defaultClient;
+            if (Object.keys(routes).length === 0) return defaultClient;
+            const registry = new ModelRegistry();
+            for (const [taskType, routeClient] of Object.entries(routes)) {
+              registry.register({
+                id: `configured:${taskType}`,
+                taskTypes: [taskType as 'fast' | 'reasoning' | 'structured'],
+                inputPricePerMillion: 0,
+                outputPricePerMillion: 0,
+                maxContextTokens: 128_000,
+                structuredOutput: true,
+                latencyMs: 1_000,
+                healthy: true,
+                client: routeClient
+              });
+            }
+            return new ModelRouter(defaultClient, routes, registry);
           }
         },
         {
@@ -138,8 +178,8 @@ export class AppModule implements NestModule {
         },
         {
           provide: TOOL_EXECUTOR,
-          inject: [ASSET_SEARCH, RuntimeTelemetry],
-          useFactory: (assetSearch: ReturnType<typeof createAssetSearch>, telemetry: RuntimeTelemetry): ToolExecutor => new InstrumentedToolExecutor(
+          inject: [ASSET_SEARCH, RuntimeTelemetry, CitationProxyService],
+          useFactory: (assetSearch: ReturnType<typeof createAssetSearch>, telemetry: RuntimeTelemetry, citations: CitationProxyService): ToolExecutor => new InstrumentedToolExecutor(
             createToolRegistryExecutor({
               assetSearch,
               economicCalendar: createEconomicCalendarGateway().getWeek,
@@ -147,24 +187,34 @@ export class AppModule implements NestModule {
               marketGateway: createMarketGateway(),
               webSearch: searchWeb
             }),
-            telemetry
+            telemetry,
+            Date.now,
+            citations
           )
         },
         {
           provide: AGENT_RUNNER,
           inject: [MODEL_CLIENT, TOOL_EXECUTOR, PLANNER, InMemoryApprovalCoordinator, SubAgentRegistry],
-          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner, approval: InMemoryApprovalCoordinator, subAgents: SubAgentRegistry): AgentRunner => new LangGraphAgentRunner({
-            model,
-            tools,
-            planner,
-            coordinator: new ResearchCoordinator(model, subAgents),
-            approval
-          })
+          useFactory: (model: ModelClient, tools: ToolExecutor, planner: Planner, approval: InMemoryApprovalCoordinator, subAgents: SubAgentRegistry): AgentRunner => {
+            const delegatePlanner = new ModelPlanner(model);
+            return new LangGraphAgentRunner({
+              model,
+              tools,
+              planner,
+              coordinator: new ResearchCoordinator(model, subAgents, delegatePlanner.planSubAgents.bind(delegatePlanner)),
+              approval
+            });
+          }
         },
         {
           provide: ChatApplicationService,
-          inject: [AGENT_RUNNER],
-          useFactory: (runner: AgentRunner) => new ChatApplicationService({ runner })
+          inject: [AGENT_RUNNER, AppConfigService],
+          useFactory: (runner: AgentRunner, config: AppConfigService) => new ChatApplicationService({
+            runner,
+            embeddingProvider: config.value.embedding
+              ? new HttpEmbeddingProvider(config.value.embedding.endpoint, config.value.embedding.apiKey, config.value.embedding.model)
+              : new HashEmbeddingProvider()
+          })
         },
         {
           provide: ResearchExportService,

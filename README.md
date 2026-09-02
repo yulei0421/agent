@@ -202,8 +202,22 @@ pnpm client
 | `PDF_CJK_FONT_PATH` | 否 | macOS Unicode 字体路径 | 部署环境中用于 PDF 中文嵌入的绝对字体路径；Linux 生产环境应配置已授权的 CJK TrueType/OpenType 字体。 |
 | `OCR_LANGUAGE` | 否 | `chi_sim+eng` | Tesseract OCR 语言组合。 |
 | `TESSERACT_LANG_PATH` / `TESSERACT_WORKER_PATH` / `TESSERACT_CORE_PATH` | 否 | Tesseract 默认资源 | Tesseract 语言数据、Worker 和 WASM 核心的绝对路径；默认语言数据从 Tesseract CDN 加载，离线或生产环境建议配置本地资源路径。 |
+| `BROWSER_ALLOWED_DOMAINS` | 否 | 空（全部拒绝） | 浏览器沙箱允许访问的公共 DNS 域名，逗号分隔；禁止内网、回环、带凭据和非 80/443 端口地址。 |
+| `EMBEDDING_API_KEY` / `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` | 否 | 本地确定性向量 | 三项同时配置时启用 OpenAI 兼容 Embedding 服务；请求级检索失败会回退到本地向量。 |
 
 ## 服务接口与事件
+
+## 桌面端可行性
+
+Electron 桌面端由主进程启动 Nest sidecar，等待健康检查后加载 Vite 构建产物；React、IndexedDB、SSE、WebSocket、PDF/OCR、Playwright 和 LangGraph 业务无需重写。桌面端不会把 API Key 打进安装包：sidecar 会按以下优先级读取配置——继承的进程环境变量、`AGENT_ENV_FILE` 指定的文件、用户数据目录 `.env`、开发目录 `.env`。
+
+首次使用已安装客户端时，请在对应用户数据目录创建 `.env` 并填写 `DEEPSEEK_API_KEY`：
+
+- macOS：`~/Library/Application Support/DeepSeek Agent/.env`
+- Windows：`%APPDATA%/DeepSeek Agent/.env`
+- Linux：`~/.config/DeepSeek Agent/.env`
+
+也可以通过 `AGENT_ENV_FILE` 指定其它配置文件路径。不要把真实 API Key 放入安装包或提交到 Git。
 
 | 方法与路径 | 用途 | 返回 |
 | --- | --- | --- |
@@ -213,6 +227,8 @@ pnpm client
 | `GET /api/capabilities` | 获取服务端固定能力摘要 | `{ "capabilities": [...] }` |
 | `GET /api/tasks/:id` | 获取进程内任务状态摘要 | 固定状态、计数和时间字段；不存在或过期返回 `404` |
 | `POST /api/tasks/:id/cancel` | 取消进程内任务 | 取消后的任务摘要；重复取消幂等 |
+| `GET /api/tasks/:id/events?after=<sequence>` | 回放任务事件 | 返回指定序号后的事件；任务 TTL 内可用。 |
+| `POST /api/tasks/:id/retry` | 重试失败或取消的任务 | 新 attempt 的任务摘要；其他状态返回 `409`。 |
 | `GET /api/market/search?q=<query>` | 按名称或代码搜索资产 | `{ "results": [...] }` |
 | `POST /api/chat/stream` | 提交会话并取得 DeepSeek 流式回答 | `text/event-stream` |
 | `POST /api/approvals/:id/:decision` | 批准或拒绝当前 SSE 请求等待中的工具调用 | `{ "approvalId": "...", "decision": "approved" }` |
@@ -221,6 +237,8 @@ pnpm client
 | `POST /api/exports/research/:format/link` | 服务端生成报告并创建短期下载链接 | `{ "downloadUrl": "...", "filename": "...", "expiresAt": "..." }` |
 | `GET /api/exports/research/download/:token` | 下载已生成的 PDF/PPTX 文件 | 对应文件附件；链接过期后返回 `404` |
 | `POST /api/documents/ingest` | 提取 PDF/图片中的文本并返回受限文档摘要 | `{ "document": { "name", "mimeType", "text", "chunks", ... } }`；原始文件只在请求内存中处理 |
+| `GET /api/citations/:id` / `POST /api/citations/:id/revalidate` | 查询或重新验证受控引用快照 | 返回来源标签、抓取时间、内容哈希和 provenance；不暴露未审计 URL。 |
+| `POST /api/browser/execute` | 执行受限浏览器动作 | 仅支持导航、点击、提取文本、截图；点击必须先通过人工审批，域名由白名单控制。 |
 | `WS /ws` | 获取连接状态、心跳与通知 | JSON WebSocket 事件 |
 
 聊天接口请求体示例：
@@ -324,9 +342,17 @@ MODEL_STRUCTURED_NAME=structured-model
 
 客户端只能提交 `fast`、`reasoning` 或 `structured` 三个固定值；缺少对应槽位时使用默认模型。专用槽位仍受现有超时、重试、熔断和零输出故障切换约束。
 
-### 临时任务运行时
+### 临时任务与后台任务运行时
 
-`POST /api/chat/stream` 的首个 SSE 事件为 `task`，其中的随机 ID 可用于查询或取消本次进程内运行。任务状态只包含 `running`、`completed`、`failed`、`cancelled` 和过期前的计数/时间，不包含消息、工具参数或上游异常。默认 TTL 为 10 分钟、最多保留 100 个任务；它不是后台队列，也不承诺服务重启或 SSE 断开后的恢复。
+`POST /api/chat/stream` 的首个 SSE 事件为 `task`，其中的随机 ID 可用于查询、事件回放或取消本次进程内运行。请求体增加 `"background": true` 时，服务端会立即返回 `202 {taskId}`，任务与 SSE 生命周期解耦，客户端断开后仍继续执行；可用 `Idempotency-Key` 避免重复提交。任务状态只包含 `running`、`completed`、`failed`、`cancelled` 和过期前的计数/时间，不包含消息、工具参数或上游异常。默认 TTL 为 10 分钟、最多保留 100 个任务；任务存储仍是进程内实现，服务重启后不会恢复，也不等同于聊天记忆。
+
+后台任务完成后会发布站内通知，并通过 `TaskNotificationService` 提供 Webhook 扩展点。生产部署应将该接口替换为带鉴权、签名和持久化队列的实现。
+
+### 文档安全、引用与浏览器边界
+
+上传文件会在 OCR/PDF 解析前进行 magic bytes、大小、扩展名、加密 PDF、EICAR/扫描器和按主体配额检查；可注入 ClamAV/ICAP 扫描器，扫描失败默认拒绝。检索优先使用配置的 Embedding 服务，失败时使用请求级本地向量，不建立跨请求聊天记忆。
+
+工具结果中的来源会进入受控引用代理，保存内容哈希、请求哈希、观测时间和工具 provenance；引用重验证只能通过服务端代理执行。浏览器执行器使用 Playwright 隔离上下文，阻止下载、内网/回环地址、跨白名单跳转和任意脚本；点击动作必须先通过现有审批协调器。
 
 备用端点使用与 DeepSeek 客户端相同的流式 OpenAI 兼容协议。它不是模型轮询或回答拼接器：只有主模型在输出任何 `delta`、推理或工具调用事件之前返回 `model_unavailable`，服务端才会把同一请求交给备用模型。
 

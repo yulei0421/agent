@@ -2,6 +2,7 @@ import type { ModelClient, ModelConversationMessage, ModelRequest } from '../app
 import { AppError } from '../domain/errors/app-error.js';
 import type { AgentCollaborationEvent, AgentRole } from '../../shared/agent-events.js';
 import { SubAgentRegistry, type SubAgentDefinition } from './sub-agent-registry.js';
+import { BudgetManager, type AgentBudget } from './budget-manager.js';
 
 const MAX_ITEM_LENGTH = 180;
 
@@ -9,12 +10,23 @@ export interface ResearchCoordinatorRequest {
   goal: string;
   signal: AbortSignal;
   onEvent?: (event: AgentCollaborationEvent) => void;
+  budget?: Partial<AgentBudget>;
 }
 
 export interface ResearchCoordinatorResult {
   messages: readonly ModelConversationMessage[];
   events: readonly AgentCollaborationEvent[];
 }
+
+export interface DynamicSubAgentPlanItem {
+  readonly role: AgentRole;
+  readonly goal: string;
+  readonly maxItems?: number;
+  readonly timeoutMs?: number;
+  readonly dependsOn?: readonly number[];
+}
+
+export type DynamicSubAgentPlanner = (goal: string, signal: AbortSignal) => Promise<readonly DynamicSubAgentPlanItem[]>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -121,10 +133,58 @@ async function runDelegate(
 }
 
 export class ResearchCoordinator {
-  constructor(private readonly model: ModelClient, private readonly registry: SubAgentRegistry = new SubAgentRegistry()) {}
+  constructor(
+    private readonly model: ModelClient,
+    private readonly registry: SubAgentRegistry = new SubAgentRegistry(),
+    private readonly dynamicPlanner?: DynamicSubAgentPlanner
+  ) {}
 
   async prepare(request: ResearchCoordinatorRequest): Promise<ResearchCoordinatorResult> {
-    const results = await Promise.all(this.registry.definitionsList().map((definition) => runDelegate(this.model, definition, request)));
+    const budget = new BudgetManager(request.budget);
+  let work: readonly { definition: SubAgentDefinition; goal: string; dependsOn: readonly number[] }[] = this.registry.definitionsList().map((definition) => ({ definition, goal: request.goal, dependsOn: [] }));
+    if (this.dynamicPlanner) {
+      try {
+        const plannedWork: { definition: SubAgentDefinition; goal: string; dependsOn: readonly number[] }[] = (await this.dynamicPlanner(request.goal, request.signal))
+          .slice(0, budget.budget.maxAgents)
+          .flatMap((item, index): { definition: SubAgentDefinition; goal: string; dependsOn: readonly number[] }[] => {
+            const definition = this.registry.get(item.role);
+            if (!definition) return [];
+            return [{
+              definition: {
+                ...definition,
+                system: `${definition.system} Focus only on this bounded subtask: ${item.goal}` as string,
+                ...(item.maxItems ? { maxItems: Math.min(definition.maxItems, Math.max(1, item.maxItems)) } : {}),
+                ...(item.timeoutMs ? { timeoutMs: Math.min(definition.timeoutMs, Math.max(100, item.timeoutMs)) } : {})
+              },
+              goal: item.goal,
+              dependsOn: (item.dependsOn ?? []).filter((dependency) => Number.isInteger(dependency) && dependency >= 0 && dependency < index)
+            }];
+          });
+        if (plannedWork.length > 0) work = plannedWork;
+      } catch {
+        // Dynamic planning is advisory; fixed safe roles remain the fallback.
+      }
+    }
+    const completed = new Set<number>();
+    const results: { message: ModelConversationMessage | null; events: AgentCollaborationEvent[] }[] = [];
+    const pending = new Set(work.map((_item, index) => index));
+    while (pending.size > 0) {
+      const ready = [...pending].filter((index) => work[index]!.dependsOn.every((dependency) => completed.has(dependency)));
+      if (ready.length === 0) break;
+      const batch = await Promise.all(ready.map(async (index) => {
+        const { definition, goal } = work[index]!;
+        budget.reserveAgent();
+        const started = Date.now();
+        const result = await runDelegate(this.model, definition, { ...request, goal });
+        budget.record({ durationMs: Date.now() - started, tokens: result.message?.content ? Math.ceil(result.message.content.length / 4) : 0 });
+        return { index, result };
+      }));
+      for (const item of batch) {
+        pending.delete(item.index);
+        completed.add(item.index);
+        results.push(item.result);
+      }
+    }
     return {
       messages: results.map((result) => result.message).filter((message): message is ModelConversationMessage => Boolean(message)),
       events: results.flatMap((result) => result.events)

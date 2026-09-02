@@ -33,6 +33,7 @@ interface PendingApproval {
 @Injectable()
 export class InMemoryApprovalCoordinator implements OnModuleDestroy {
   private readonly pending = new Map<string, PendingApproval>();
+  private readonly decisions = new Map<string, ApprovalRequest>();
   private readonly ttlMs: number;
 
   constructor(options: { ttlMs?: number } = {}) {
@@ -91,12 +92,16 @@ export class InMemoryApprovalCoordinator implements OnModuleDestroy {
     }
     const pending = this.pending.get(id);
     if (!pending || pending.expiresAt <= now()) throw new AppError('approval_not_found');
-    this.pending.delete(id);
-    pending.cleanup();
-    pending.resolve({ id, status: input.decision, decision: input.decision });
+      this.pending.delete(id);
+      pending.cleanup();
+      const result = { id, status: input.decision, decision: input.decision } as ApprovalRequest;
+      this.decisions.set(id, result);
+      pending.resolve(result);
   }
 
   status(id: string, now: () => number = Date.now): ApprovalRequest | undefined {
+    const decision = this.decisions.get(id);
+    if (decision) return decision;
     const pending = this.pending.get(id);
     if (!pending || pending.expiresAt <= now()) {
       this.pending.delete(id);
@@ -111,6 +116,7 @@ export class InMemoryApprovalCoordinator implements OnModuleDestroy {
       pending.resolve({ id: pending.id, status: 'cancelled', decision: 'rejected' });
     }
     this.pending.clear();
+    this.decisions.clear();
   }
 
 }

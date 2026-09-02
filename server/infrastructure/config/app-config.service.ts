@@ -21,6 +21,8 @@ export interface AppConfig {
   tesseractLangPath?: string;
   tesseractWorkerPath?: string;
   tesseractCorePath?: string;
+  browserAllowedDomains?: readonly string[];
+  embedding?: { apiKey: string; endpoint: string; model: string };
   desktopSessionToken?: string;
   staticRendererDir?: string;
   modelResilience: ModelResilienceConfig;
@@ -92,6 +94,13 @@ function readOcrLanguage(value: string | undefined): string {
   return candidate;
 }
 
+function readBrowserDomains(value: string | undefined): readonly string[] {
+  if (!value) return [];
+  const domains = value.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
+  if (domains.length > 32 || domains.some((domain) => !/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/u.test(domain))) throw new Error('BROWSER_ALLOWED_DOMAINS must contain public DNS names');
+  return Object.freeze([...new Set(domains)]);
+}
+
 function readDesktopSessionToken(value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (!/^[A-Za-z0-9_-]{24,256}$/u.test(value)) throw new Error('DESKTOP_SESSION_TOKEN must be a base64url token between 24 and 256 characters');
@@ -129,9 +138,12 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   const tesseractLangPath = readAbsoluteFilePath(environment.TESSERACT_LANG_PATH, 'TESSERACT_LANG_PATH');
   const tesseractWorkerPath = readAbsoluteFilePath(environment.TESSERACT_WORKER_PATH, 'TESSERACT_WORKER_PATH');
   const tesseractCorePath = readAbsoluteFilePath(environment.TESSERACT_CORE_PATH, 'TESSERACT_CORE_PATH');
+  const browserAllowedDomains = readBrowserDomains(environment.BROWSER_ALLOWED_DOMAINS);
   const desktopSessionToken = readDesktopSessionToken(environment.DESKTOP_SESSION_TOKEN);
   const staticRendererDir = readAbsoluteFilePath(environment.STATIC_RENDERER_DIR, 'STATIC_RENDERER_DIR');
   if (Boolean(desktopSessionToken) !== Boolean(staticRendererDir)) throw new Error('DESKTOP_SESSION_TOKEN and STATIC_RENDERER_DIR must be configured together');
+  const embeddingConfigured = Boolean(environment.EMBEDDING_API_KEY || environment.EMBEDDING_ENDPOINT || environment.EMBEDDING_MODEL);
+  if (embeddingConfigured && (!environment.EMBEDDING_API_KEY || !environment.EMBEDDING_ENDPOINT || !environment.EMBEDDING_MODEL)) throw new Error('EMBEDDING_API_KEY, EMBEDDING_ENDPOINT, and EMBEDDING_MODEL must be configured together');
   const modelRoutes = readModelRoutes(environment);
   if (deepSeekApiKey === API_KEY_PLACEHOLDER) throw new Error('DEEPSEEK_API_KEY must not use the placeholder value');
   if (hasFallbackConfiguration && (!fallbackApiKey || !fallbackBaseUrl || !fallbackModel)) {
@@ -161,8 +173,10 @@ export function parseAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
     ...(tesseractLangPath ? { tesseractLangPath } : {}),
     ...(tesseractWorkerPath ? { tesseractWorkerPath } : {}),
     ...(tesseractCorePath ? { tesseractCorePath } : {}),
+    ...(browserAllowedDomains.length > 0 ? { browserAllowedDomains } : {}),
     ...(desktopSessionToken ? { desktopSessionToken } : {}),
     ...(staticRendererDir ? { staticRendererDir } : {}),
+    ...(embeddingConfigured ? { embedding: { apiKey: environment.EMBEDDING_API_KEY!, endpoint: readHttpOrigin(environment.EMBEDDING_ENDPOINT, '', 'EMBEDDING_ENDPOINT'), model: environment.EMBEDDING_MODEL! } } : {}),
     modelResilience: {
       totalTimeoutMs: readBoundedInteger(environment.MODEL_TOTAL_TIMEOUT_MS, 60000, 'MODEL_TOTAL_TIMEOUT_MS', 100, 120000),
       firstEventTimeoutMs: readBoundedInteger(environment.MODEL_FIRST_EVENT_TIMEOUT_MS, 15000, 'MODEL_FIRST_EVENT_TIMEOUT_MS', 100, 120000),

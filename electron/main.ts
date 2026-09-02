@@ -9,6 +9,15 @@ const currentDirectory = __dirname;
 let sidecar: DesktopSidecar | undefined;
 let mainWindow: BrowserWindow | undefined;
 
+function resolveEnvironmentFile(): string | undefined {
+  const configured = process.env.AGENT_ENV_FILE?.trim();
+  if (configured) return configured;
+  const userEnvironmentFile = join(app.getPath('userData'), '.env');
+  if (existsSync(userEnvironmentFile)) return userEnvironmentFile;
+  const developmentEnvironmentFile = join(app.getAppPath(), '.env');
+  return existsSync(developmentEnvironmentFile) ? developmentEnvironmentFile : undefined;
+}
+
 function allowedUrl(url: string, origin: string): boolean {
   return url === origin || url.startsWith(`${origin}/`);
 }
@@ -56,6 +65,7 @@ async function openDesktopWindow(): Promise<void> {
   sidecar = await startDesktopSidecar({
     ...options,
     executablePath: process.execPath,
+    environmentFile: resolveEnvironmentFile(),
     workingDirectory: app.getPath('userData')
   });
   installDesktopSessionHeader(sidecar.origin, sidecar.token);

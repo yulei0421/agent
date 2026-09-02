@@ -17,6 +17,21 @@ export interface DesktopSidecar {
   stop(): Promise<void>;
 }
 
+export function createSidecarEnvironment(
+  baseEnvironment: NodeJS.ProcessEnv,
+  options: Pick<SidecarLaunchOptions, 'port' | 'origin' | 'token' | 'rendererDir'> & { environmentFile?: string }
+): NodeJS.ProcessEnv {
+  return {
+    ...baseEnvironment,
+    ELECTRON_RUN_AS_NODE: '1',
+    PORT: String(options.port),
+    CLIENT_URL: options.origin,
+    DESKTOP_SESSION_TOKEN: options.token,
+    STATIC_RENDERER_DIR: options.rendererDir,
+    ...(options.environmentFile ? { AGENT_ENV_FILE: options.environmentFile } : {})
+  };
+}
+
 export async function findAvailableLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -79,18 +94,18 @@ export async function startDesktopSidecar(input: {
   readonly rendererDir: string;
   readonly serverEntry: string;
   readonly executablePath: string;
+  readonly environmentFile?: string;
   readonly workingDirectory?: string;
 }): Promise<DesktopSidecar> {
   const child = spawn(input.executablePath, [input.serverEntry], {
     ...(input.workingDirectory ? { cwd: input.workingDirectory } : {}),
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      PORT: String(input.port),
-      CLIENT_URL: input.origin,
-      DESKTOP_SESSION_TOKEN: input.token,
-      STATIC_RENDERER_DIR: input.rendererDir
-    },
+    env: createSidecarEnvironment(process.env, {
+      port: input.port,
+      origin: input.origin,
+      token: input.token,
+      rendererDir: input.rendererDir,
+      environmentFile: input.environmentFile
+    }),
     stdio: 'inherit'
   });
   try {

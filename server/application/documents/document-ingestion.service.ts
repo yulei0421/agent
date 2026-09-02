@@ -1,5 +1,6 @@
 import { AppError } from '../../domain/errors/app-error.js';
 import type { ExtractedDocument, SourceDocumentMimeType } from '../../../shared/document.js';
+import { DocumentSecurityService } from './document-security.service.js';
 
 export const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_DOCUMENT_NAME = 96;
@@ -75,12 +76,16 @@ function chunkText(value: string): string[] {
 }
 
 export class DocumentIngestionService {
-  constructor(private readonly extractor: DocumentExtractor) {}
+  constructor(
+    private readonly extractor: DocumentExtractor,
+    private readonly security: DocumentSecurityService = new DocumentSecurityService()
+  ) {}
 
-  async ingest(value: unknown, signal?: AbortSignal): Promise<ExtractedDocument> {
+  async ingest(value: unknown, signal?: AbortSignal, subject?: string): Promise<ExtractedDocument> {
     const input = parseUpload(value);
     if (!input) throw new AppError('invalid_request');
     if (signal?.aborted) throw new AppError('request_aborted');
+    await this.security.inspect({ ...input, ...(subject ? { subject } : {}) });
     let extracted: ExtractedDocumentContent;
     try {
       extracted = await this.extractor.extract({ ...input, signal });
