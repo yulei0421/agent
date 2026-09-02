@@ -1,12 +1,11 @@
 import { app, BrowserWindow, dialog, session } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createSidecarLaunchOptions, findAvailableLoopbackPort, startDesktopSidecar, type DesktopSidecar } from './sidecar.js';
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
 const DESKTOP_SESSION_HEADER = 'x-desktop-session-token';
-const currentDirectory = join(fileURLToPath(new URL('.', import.meta.url)));
+const currentDirectory = __dirname;
 let sidecar: DesktopSidecar | undefined;
 let mainWindow: BrowserWindow | undefined;
 

@@ -9,7 +9,10 @@ import { createDesktopSessionGuard } from './api/desktop-session.middleware.js';
 
 export async function createApp(environment: NodeJS.ProcessEnv = process.env): Promise<INestApplication> {
   const config = parseAppConfig(environment);
-  const app = await NestFactory.create(AppModule.forRoot(environment), { logger: false });
+  const app = await NestFactory.create(AppModule.forRoot(environment), {
+    logger: false,
+    abortOnError: false
+  });
   app.useWebSocketAdapter(new WsAdapter(app, {
     messageParser(data) {
       try {

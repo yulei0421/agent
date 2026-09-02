@@ -58,9 +58,18 @@ export class AppModule implements NestModule {
       controllers: [HealthController, MetricsController, MarketController, ChatController, ApprovalController, ExportController, CapabilitiesController, TaskController, DocumentsController],
       providers: [
         AppLoggerService,
-        CapabilityRegistry,
-        InMemoryTaskRuntime,
-        InMemoryResearchDownloadStore,
+        {
+          provide: CapabilityRegistry,
+          useFactory: () => new CapabilityRegistry()
+        },
+        {
+          provide: InMemoryTaskRuntime,
+          useFactory: () => new InMemoryTaskRuntime()
+        },
+        {
+          provide: InMemoryResearchDownloadStore,
+          useFactory: () => new InMemoryResearchDownloadStore()
+        },
         {
           provide: DocumentIngestionService,
           inject: [AppConfigService],
@@ -71,8 +80,14 @@ export class AppModule implements NestModule {
             ...(config.value.tesseractCorePath ? { ocrCorePath: config.value.tesseractCorePath } : {})
           }))
         },
-        InMemoryApprovalCoordinator,
-        SubAgentRegistry,
+        {
+          provide: InMemoryApprovalCoordinator,
+          useFactory: () => new InMemoryApprovalCoordinator()
+        },
+        {
+          provide: SubAgentRegistry,
+          useFactory: () => new SubAgentRegistry()
+        },
         StatusGateway,
         RuntimeTelemetry,
         { provide: ASSET_SEARCH, useFactory: () => createAssetSearch() },

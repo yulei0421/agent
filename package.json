@@ -9,7 +9,7 @@
     "client": "vite --host 127.0.0.1",
     "build": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:electron": "tsc -p tsconfig.electron.json && tsx scripts/build-electron-package.ts",
     "desktop:dev": "concurrently -k \"pnpm server\" \"pnpm client\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on tcp:127.0.0.1:5173 file:dist-electron/main.js && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
     "desktop:build": "pnpm build && pnpm build:server && pnpm build:electron && electron-builder",
     "test": "tsx --test tests/*.test.ts",
@@ -18,6 +18,7 @@
     "test:smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.3",
     "@langchain/langgraph": "^1.4.8",
     "@napi-rs/canvas": "0.1.100",
     "@nestjs/common": "^11.1.28",
@@ -39,7 +40,8 @@
     "rxjs": "^7.8.2",
     "tesseract.js": "^6.0.1",
     "vite": "^7.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
