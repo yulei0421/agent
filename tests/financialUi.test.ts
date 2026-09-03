@@ -136,12 +136,13 @@ test('ChatWindow exposes bounded text and binary document attachments', async ()
     readSource('../src/lib/attachments.ts')
   ]);
 
-  assert.match(chat, /添加文本附件/);
+  assert.match(chat, /aria-label="添加附件"/);
+  assert.match(chat, /className="attachment-chip"/);
+  assert.match(chat, /aria-label=\{`移除附件/);
   assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
   assert.match(chat, /normalizeTextAttachment\(file\.name, await file\.text\(\)\)/);
   assert.match(chat, /toChatDocument\(attachment\)/);
   assert.match(chat, /ingestBinaryAttachment\(file\)/);
-  assert.match(chat, /历史文本附件会按问题在浏览器本地召回相关片段/);
   assert.match(attachment, /MAX_ATTACHMENT_CHARS = 3500/);
   assert.match(attachment, /ALLOWED_ATTACHMENT_EXTENSIONS/);
   assert.match(attachment, /api\/documents\/ingest/);

@@ -37,13 +37,14 @@ test('streamChat sends the review flag only when requested', async () => {
   assert.equal((JSON.parse(requestBody) as { review?: boolean }).review, true);
 });
 
-test('the composer exposes review mode without changing the automatic default', async () => {
+test('the compact composer exposes review mode as a pressed tool button without changing the automatic default', async () => {
   const chatWindow = await source('../src/components/ChatWindow.tsx');
   const app = await source('../src/App.tsx');
 
-  assert.match(chatWindow, /人工审批/);
-  assert.match(chatWindow, /onReviewModeChange/);
-  assert.match(chatWindow, /approvalMode/);
+  assert.match(chatWindow, /aria-pressed=\{approvalMode\}/);
+  assert.match(chatWindow, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
+  assert.match(chatWindow, /disabled=\{streaming\}/);
+  assert.match(chatWindow, /onReviewModeChange\(!approvalMode\)/);
   assert.match(app, /const \[reviewMode, setReviewMode\] = useState\(false\)/);
   assert.match(app, /reviewMode/);
 });
