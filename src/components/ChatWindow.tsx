@@ -113,6 +113,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
                 <span>{attachment.name}</span>
                 <button
                   aria-label={`移除附件 ${attachment.name}`}
+                  title={`移除附件 ${attachment.name}`}
                   disabled={streaming}
                   onClick={() => {
                     setAttachment(null);

@@ -195,9 +195,11 @@ test('ChatWindow renders a dynamic attachment removal button inside the attachme
 
   const disabled = jsxAttributeExpression(removeButton, 'disabled');
   const onClick = jsxAttributeExpression(removeButton, 'onClick');
+  const title = jsxAttributeExpression(removeButton, 'title');
   assert.ok(hasJsxAncestorWithStaticClassToken(removeButton, 'attachment-chip'));
   assert.ok(disabled && isIdentifier(disabled, 'streaming'));
   assert.ok(onClick);
+  assert.ok(title && isAttachmentRemovalLabel(title));
   const removeHandler = unwrapExpression(onClick);
   assert.ok(ts.isArrowFunction(removeHandler) && ts.isBlock(removeHandler.body));
   assert.ok(callsNamed(removeHandler.body, 'setAttachment').some((call) => (
