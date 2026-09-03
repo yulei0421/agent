@@ -55,6 +55,7 @@ final result: passed
 - 320px 窄屏截图：`/tmp/deepseek-compact-composer-320.png`。
 - 附件移除后截图：`/tmp/deepseek-compact-composer-attachment-removed.png`。
 - 停止生成状态截图：`/tmp/deepseek-compact-composer-stop.png`。
+- 附件错误状态截图：`/tmp/deepseek-compact-composer-attachment-error.png`。
 
 ### 桌面验收（1440 x 900）
 
@@ -63,12 +64,28 @@ final result: passed
 - 焦点态为单一 `3px` 绿色 outline，带 `2px` offset；未再出现双重焦点环。
 - 审批按钮切换后 `aria-pressed="true"`；最长文本附件成功显示 chip，并可移除。移除后的实际页面截图中 chip 数量为 `0`，composer 回到 `106px`。附件完成状态由 polite live region 播报。
 - 本地后端未配置模型，真实请求会立即返回 `model_unavailable`，无法观察持续的真实流式生成。使用 Playwright 对 `/api/chat/stream` 的 `2s` 延迟 SSE 拦截验证界面状态：停止按钮可见、已启用、尺寸 `44 x 44px`，点击后发送按钮原位恢复；停止态截图与脚本输出一并保留。
+- 空 `TXT` 附件的实际页面检查显示错误文案、`role="alert"` 和 `0` 个 chip；对应截图保留在上述路径。
+- 键盘实际检查：Shift+Enter 后文本追加一行换行且未进入停止态；组合输入期间的 Enter 保留文本且未进入停止态；普通 Enter 进入可见、可点击的停止态，点击后恢复发送按钮。
 
 ### 移动验收（390 x 844，补充 320 x 844）
 
 - 390px：页面与 body 宽度均为 `390px`；composer 为 `370px`，长文件名 chip 为 `332px`，没有页面级横向滚动、遮挡或双全宽操作按钮。
 - 320px：独立浏览器 context 与截图中，页面和 body 宽度均为 `320px`；composer 为 `300px`，chip 为 `262px`。附件、审批和发送控件分别为 `44 x 44px`、`70 x 44px`、`44 x 44px`，均可触达。
 - 所有关键状态均完成实际页面检查：空输入、长输入、审批开启、长文本附件、附件移除、焦点、模拟流式停止、390px 与 320px 窄屏。
+
+### Playwright 复现与隔离
+
+- 每个验收页面均使用 `browser.newContext({ viewport })` 创建新的非持久 context，使用完毕后调用 `browser.close()`；登录、会话和消息仅存在于临时 context，不会写入已有用户的 IndexedDB。
+- 停止态的受控请求使用以下拦截，真实后端限制与 mock 验证保持分开：
+
+```js
+await page.route('**/api/chat/stream', async (route) => {
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+});
+```
+
+- 该隔离运行的原始结果：附件错误 `role="alert"`、chip 数量 `0`；Shift+Enter 后值包含追加换行、停止按钮数量 `0`；组合输入 Enter 后值保持 `组合输入`、停止按钮数量 `0`；普通 Enter 后停止按钮 `visible=true`、`enabled=true`，点击后 `发送消息` 恢复可见。
 
 ### 自动验证
 
