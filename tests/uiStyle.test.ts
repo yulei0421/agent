@@ -192,8 +192,22 @@ test('composer icon buttons expose a visible focus-within ring', async () => {
   const source = await readSource('../src/styles.css');
   const focusRule = cssRuleBody(source, /\.composer-icon-button:focus-within/);
 
-  assert.match(focusRule, /outline:\s*[^;]+/);
-  assert.match(focusRule, /outline-offset:\s*[^;]+/);
+  assert.match(focusRule, /outline:\s*3px\s+solid\s+rgba\(15,\s*118,\s*110,\s*0\.28\)/);
+  assert.match(focusRule, /outline-offset:\s*2px/);
+});
+
+test('composer adds a subtle non-interactive background veil above the input', async () => {
+  const source = await readSource('../src/styles.css');
+  const veilRule = cssRuleBody(source, /\.composer::before/);
+
+  assert.match(veilRule, /position:\s*absolute/);
+  assert.match(veilRule, /z-index:\s*0/);
+  assert.match(veilRule, /left:\s*-24px/);
+  assert.match(veilRule, /right:\s*-24px/);
+  assert.match(veilRule, /bottom:\s*100%/);
+  assert.match(veilRule, /background:\s*linear-gradient\(180deg,\s*transparent,\s*var\(--surface\)\s+85%\)/);
+  assert.match(veilRule, /pointer-events:\s*none/);
+  assert.match(veilRule, /content:\s*['"]['"]/);
 });
 
 test('stylesheet provides the standard screen-reader-only utility', async () => {
