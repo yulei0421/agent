@@ -12,10 +12,10 @@ test('normalizes bounded local text attachments', () => {
 test('preserves supported extensions when truncating long text attachment names', () => {
   for (const extension of ['txt', 'md', 'csv', 'json']) {
     const attachment = normalizeTextAttachment(`${'a'.repeat(129)}.${extension}`, '附件内容');
+    const expectedName = `${'a'.repeat(95 - extension.length)}.${extension}`;
 
     assert.ok(attachment);
-    assert.ok(attachment.name.length <= 96);
-    assert.ok(attachment.name.endsWith(`.${extension}`));
+    assert.equal(attachment.name, expectedName);
     assert.equal(attachment.content, '附件内容');
   }
 });
