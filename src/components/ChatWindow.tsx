@@ -22,6 +22,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
   const [attachment, setAttachment] = useState<TextAttachment | ChatDocument | null>(null);
   const [attachmentLoading, setAttachmentLoading] = useState(false);
   const [attachmentError, setAttachmentError] = useState('');
+  const [attachmentAnnouncement, setAttachmentAnnouncement] = useState('');
   const placeholder = financialMode
     ? '输入金融问题和显式代码，例如 600519.SH、0700.HK、AAPL、BTC/USDT'
     : '问 DeepSeek 一个问题...';
@@ -37,6 +38,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
   async function handleAttachmentChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
+    setAttachmentAnnouncement('');
     setAttachmentError('');
     if (!file) return;
     setAttachmentLoading(true);
@@ -49,9 +51,12 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
           return;
         }
         setAttachment(next);
+        setAttachmentAnnouncement(`已添加附件 ${next.name}`);
         return;
       }
-      setAttachment(await ingestBinaryAttachment(file));
+      const next = await ingestBinaryAttachment(file);
+      setAttachment(next);
+      setAttachmentAnnouncement(`已添加附件 ${next.name}`);
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : '附件解析失败');
     } finally {
@@ -76,6 +81,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
         setContent('');
         const documents = attachment ? ['content' in attachment ? toChatDocument(attachment) : attachment] : undefined;
         setAttachment(null);
+        setAttachmentAnnouncement('');
         onSend(value, undefined, documents);
       }}>
         <textarea
@@ -92,7 +98,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
           placeholder={placeholder}
         />
         <span aria-atomic="true" aria-live="polite" className="sr-only">
-          {attachmentLoading ? '正在解析附件' : attachment ? `已添加附件 ${attachment.name}` : ''}
+          {attachmentLoading ? '正在解析附件' : attachmentAnnouncement}
         </span>
         {(attachmentLoading || attachment || attachmentError) && (
           <div className="composer-status-row">
@@ -108,7 +114,10 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
                 <button
                   aria-label={`移除附件 ${attachment.name}`}
                   disabled={streaming}
-                  onClick={() => setAttachment(null)}
+                  onClick={() => {
+                    setAttachment(null);
+                    setAttachmentAnnouncement('');
+                  }}
                   type="button"
                 >
                   <X aria-hidden="true" />

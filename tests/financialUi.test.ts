@@ -5,7 +5,6 @@ import * as ts from 'typescript/unstable/ast';
 import { streamChat } from '../src/lib/chat.js';
 import {
   closeSourceAst,
-  directArrowCall,
   findNodes,
   hasJsxAncestorWithStaticClassToken,
   isIdentifier,
@@ -46,6 +45,12 @@ function isAttachmentRemovalLabel(expression: ts.Expression): boolean {
     && current.head.text.startsWith('移除附件')
     && current.templateSpans.some((span) => isProperty(span.expression, 'attachment', 'name'))
   );
+}
+
+function callsNamed(root: ts.Node, name: string): ts.CallExpression[] {
+  return findNodes(root, (node): node is ts.CallExpression => (
+    ts.isCallExpression(node) && isIdentifier(node.expression, name)
+  ));
 }
 
 function streamResponse(events: string): Response {
@@ -193,10 +198,14 @@ test('ChatWindow renders a dynamic attachment removal button inside the attachme
   assert.ok(hasJsxAncestorWithStaticClassToken(removeButton, 'attachment-chip'));
   assert.ok(disabled && isIdentifier(disabled, 'streaming'));
   assert.ok(onClick);
-  const removeCall = directArrowCall(onClick);
-  assert.ok(removeCall && isIdentifier(removeCall.expression, 'setAttachment'));
-  assert.equal(removeCall.arguments.length, 1);
-  assert.equal(removeCall.arguments[0]?.kind, ts.SyntaxKind.NullKeyword);
+  const removeHandler = unwrapExpression(onClick);
+  assert.ok(ts.isArrowFunction(removeHandler) && ts.isBlock(removeHandler.body));
+  assert.ok(callsNamed(removeHandler.body, 'setAttachment').some((call) => (
+    call.arguments[0]?.kind === ts.SyntaxKind.NullKeyword
+  )));
+  assert.ok(callsNamed(removeHandler.body, 'setAttachmentAnnouncement').some((call) => (
+    Boolean(call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text === '')
+  )));
   assert.equal(jsxStaticAttribute(removeButton, 'type'), 'button');
 });
 

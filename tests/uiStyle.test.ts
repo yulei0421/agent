@@ -6,6 +6,7 @@ import {
   balancedBlock,
   closeSourceAst,
   findNodes,
+  hasJsxAncestorWithStaticClassToken,
   hasStaticClassToken,
   isIdentifier,
   isJsxElementNamed,
@@ -47,6 +48,11 @@ function isStringValue(expression: ts.Expression, value: string): boolean {
     (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
     && current.text === value
   );
+}
+
+function isBooleanValue(expression: ts.Expression, value: boolean): boolean {
+  const current = unwrapExpression(expression);
+  return value ? current.kind === ts.SyntaxKind.TrueKeyword : current.kind === ts.SyntaxKind.FalseKeyword;
 }
 
 function isProperty(expression: ts.Expression, owner: string, property: string): boolean {
@@ -127,6 +133,81 @@ function isNegatedContentTrim(expression: ts.Expression): boolean {
   );
 }
 
+function directCallStatement(
+  statement: ts.Statement,
+  name: string,
+  argument: (value: ts.Expression) => boolean
+): boolean {
+  if (!ts.isExpressionStatement(statement)) return false;
+  const expression = unwrapExpression(statement.expression);
+  if (!ts.isCallExpression(expression) || !isIdentifier(expression.expression, name)) return false;
+  const firstArgument = expression.arguments[0];
+  return Boolean(firstArgument && argument(firstArgument));
+}
+
+function callsNamed(root: ts.Node, name: string): ts.CallExpression[] {
+  return findNodes(root, (node): node is ts.CallExpression => (
+    ts.isCallExpression(node) && isIdentifier(node.expression, name)
+  ));
+}
+
+function functionDeclarationNamed(sourceFile: ts.SourceFile, name: string): ts.FunctionDeclaration {
+  const matches = findNodes(sourceFile, (node): node is ts.FunctionDeclaration => (
+    ts.isFunctionDeclaration(node) && node.name?.text === name
+  ));
+  assert.equal(matches.length, 1);
+  const match = matches[0];
+  assert.ok(match);
+  return match;
+}
+
+function isBindingIdentifier(name: ts.BindingName, value: string): boolean {
+  return ts.isIdentifier(name) && name.text === value;
+}
+
+function isAttachmentAnnouncementState(declaration: ts.VariableDeclaration): boolean {
+  if (!ts.isArrayBindingPattern(declaration.name) || declaration.name.elements.length !== 2) return false;
+  const [value, setter] = declaration.name.elements;
+  const initializer = declaration.initializer && unwrapExpression(declaration.initializer);
+  if (
+    !value
+    || !setter
+    || !ts.isBindingElement(value)
+    || !ts.isBindingElement(setter)
+    || !value.name
+    || !setter.name
+    || !initializer
+    || !ts.isCallExpression(initializer)
+  ) return false;
+  const initialValue = initializer.arguments[0];
+  return Boolean(
+    initialValue
+    && isBindingIdentifier(value.name, 'attachmentAnnouncement')
+    && isBindingIdentifier(setter.name, 'setAttachmentAnnouncement')
+    && isIdentifier(initializer.expression, 'useState')
+    && isStringValue(initialValue, '')
+  );
+}
+
+function isAnnouncementTemplate(expression: ts.Expression): boolean {
+  const current = unwrapExpression(expression);
+  const [span] = ts.isTemplateExpression(current) ? current.templateSpans : [];
+  return (
+    ts.isTemplateExpression(current)
+    && current.head.text === '已添加附件 '
+    && current.templateSpans.length === 1
+    && Boolean(span && isProperty(span.expression, 'next', 'name'))
+  );
+}
+
+function jsxBlockArrowBody(expression: ts.Expression | undefined): ts.Block {
+  assert.ok(expression);
+  const handler = unwrapExpression(expression);
+  assert.ok(ts.isArrowFunction(handler));
+  if (!ts.isArrowFunction(handler) || !ts.isBlock(handler.body)) throw new Error('expected an arrow function block');
+  return handler.body;
+}
+
 test('ChatWindow forwards streaming state to MessageList', async () => {
   const source = await readSource('../src/components/ChatWindow.tsx');
 
@@ -202,6 +283,8 @@ test('composer focus ring remains visible above its background veil', async () =
 
   assert.match(focusRule, /outline:\s*3px\s+solid\s+rgba\(15,\s*118,\s*110,\s*0\.28\)/);
   assert.match(focusRule, /outline-offset:\s*2px/);
+  assert.match(focusRule, /box-shadow:\s*[^;]*0\s+10px\s+24px/);
+  assert.doesNotMatch(focusRule, /box-shadow:\s*[^;]*\b0\s+0\s+0\b/);
 });
 
 test('composer adds a subtle non-interactive background veil above the input', async () => {
@@ -270,6 +353,10 @@ test('ChatWindow renders exactly one compact toolbar without legacy composer sec
 
 test('ChatWindow keeps attachment updates in a persistent polite live region', () => {
   const sourceFile = chatWindowAst();
+  const announcementState = findNodes(sourceFile, (node): node is ts.VariableDeclaration => (
+    ts.isVariableDeclaration(node) && isAttachmentAnnouncementState(node)
+  ));
+  assert.equal(announcementState.length, 1);
   const liveRegions = findNodes(sourceFile, (node): node is ts.JsxElement => (
     ts.isJsxElement(node)
     && isJsxElementNamed(node, 'span')
@@ -283,11 +370,14 @@ test('ChatWindow keeps attachment updates in a persistent polite live region', (
   assert.equal(jsxStaticAttribute(liveRegion, 'aria-atomic'), 'true');
   assert.equal(jsxStaticAttribute(liveRegion, 'role'), undefined);
   assert.ok(liveRegion.parent && isJsxElementNamed(liveRegion.parent, 'form'));
-  assert.match(
-    liveRegion.getText(sourceFile),
-    /\{attachmentLoading\s*\?\s*'正在解析附件'\s*:\s*attachment\s*\?\s*`已添加附件\s+\$\{attachment\.name\}`\s*:\s*''\}/
-  );
-  assert.doesNotMatch(liveRegion.getText(sourceFile), /attachmentError/);
+  const announcements = findNodes(liveRegion, (node): node is ts.ConditionalExpression => (
+    ts.isConditionalExpression(node) && isIdentifier(node.condition, 'attachmentLoading')
+  ));
+  assert.equal(announcements.length, 1);
+  const announcement = announcements[0];
+  assert.ok(announcement);
+  assert.ok(isStringValue(announcement.whenTrue, '正在解析附件'));
+  assert.ok(isIdentifier(announcement.whenFalse, 'attachmentAnnouncement'));
   assert.equal(findNodes(liveRegion, (node): node is ts.JsxElement => isJsxElementNamed(node, 'button')).length, 0);
 
   const errors = findNodes(sourceFile, (node): node is ts.JsxElement => (
@@ -299,13 +389,69 @@ test('ChatWindow keeps attachment updates in a persistent polite live region', (
   assert.equal(jsxStaticAttribute(error, 'role'), 'alert');
 });
 
-test('ChatWindow announces loading before parsing text attachments', async () => {
-  const source = await readSource('../src/components/ChatWindow.tsx');
+test('ChatWindow scopes both attachment parser paths to one loading lifecycle', () => {
+  const handler = functionDeclarationNamed(chatWindowAst(), 'handleAttachmentChange');
+  assert.ok(handler.body);
+  const statements = [...handler.body.statements];
+  const announcementResetIndex = statements.findIndex((statement) => (
+    directCallStatement(statement, 'setAttachmentAnnouncement', (argument) => isStringValue(argument, ''))
+  ));
+  const loadingStartIndex = statements.findIndex((statement) => (
+    directCallStatement(statement, 'setAttachmentLoading', (argument) => isBooleanValue(argument, true))
+  ));
+  const parsingTryIndex = statements.findIndex((statement) => ts.isTryStatement(statement));
+  const parsingTry = statements[parsingTryIndex];
 
-  assert.match(
-    source,
-    /setAttachmentLoading\(true\)[\s\S]*?normalizeTextAttachment\(file\.name, await file\.text\(\)\)/
-  );
+  assert.ok(announcementResetIndex >= 0);
+  assert.ok(loadingStartIndex > announcementResetIndex);
+  assert.ok(parsingTryIndex > loadingStartIndex);
+  assert.ok(parsingTry && ts.isTryStatement(parsingTry));
+  assert.ok(callsNamed(parsingTry.tryBlock, 'normalizeTextAttachment').length > 0);
+  assert.ok(callsNamed(parsingTry.tryBlock, 'ingestBinaryAttachment').length > 0);
+  const finallyBlock = parsingTry.finallyBlock;
+  assert.ok(finallyBlock);
+  assert.ok(callsNamed(finallyBlock, 'setAttachmentLoading').some((call) => (
+    Boolean(call.arguments[0] && isBooleanValue(call.arguments[0], false))
+  )));
+
+  const successAnnouncements = callsNamed(parsingTry.tryBlock, 'setAttachmentAnnouncement');
+  assert.equal(successAnnouncements.length, 2);
+  assert.ok(successAnnouncements.every((call) => (
+    Boolean(call.arguments[0] && isAnnouncementTemplate(call.arguments[0]))
+  )));
+  const catchClause = parsingTry.catchClause;
+  assert.ok(catchClause);
+  assert.equal(callsNamed(catchClause.block, 'setAttachmentAnnouncement').length, 0);
+  assert.equal(callsNamed(catchClause.block, 'setAttachment').length, 0);
+});
+
+test('ChatWindow clears attachment announcements when removing or sending an attachment', () => {
+  const sourceFile = chatWindowAst();
+  const removeButtons = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    isJsxElementNamed(node, 'button') && hasJsxAncestorWithStaticClassToken(node, 'attachment-chip')
+  ));
+  assert.equal(removeButtons.length, 1);
+  const removeButton = removeButtons[0];
+  assert.ok(removeButton);
+  const removeHandler = jsxAttributeExpression(removeButton, 'onClick');
+  const removeBody = jsxBlockArrowBody(removeHandler);
+  assert.ok(callsNamed(removeBody, 'setAttachment').some((call) => call.arguments[0]?.kind === ts.SyntaxKind.NullKeyword));
+  assert.ok(callsNamed(removeBody, 'setAttachmentAnnouncement').some((call) => (
+    Boolean(call.arguments[0] && isStringValue(call.arguments[0], ''))
+  )));
+
+  const composerForms = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    isJsxElementNamed(node, 'form') && hasStaticClassToken(node, 'composer')
+  ));
+  assert.equal(composerForms.length, 1);
+  const composerForm = composerForms[0];
+  assert.ok(composerForm);
+  const submitHandler = jsxAttributeExpression(composerForm, 'onSubmit');
+  const submitBody = jsxBlockArrowBody(submitHandler);
+  assert.ok(callsNamed(submitBody, 'setAttachment').some((call) => call.arguments[0]?.kind === ts.SyntaxKind.NullKeyword));
+  assert.ok(callsNamed(submitBody, 'setAttachmentAnnouncement').some((call) => (
+    Boolean(call.arguments[0] && isStringValue(call.arguments[0], ''))
+  )));
 });
 
 test('composer toolbar switches between stop and send button branches while streaming', async () => {
