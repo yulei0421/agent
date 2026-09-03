@@ -188,6 +188,26 @@ test('composer uses compact textarea spacing', async () => {
   assert.match(textareaInteractionRule, /padding:\s*8px 10px/);
 });
 
+test('composer icon buttons expose a visible focus-within ring', async () => {
+  const source = await readSource('../src/styles.css');
+  const focusRule = cssRuleBody(source, /\.composer-icon-button:focus-within/);
+
+  assert.match(focusRule, /outline:\s*[^;]+/);
+  assert.match(focusRule, /outline-offset:\s*[^;]+/);
+});
+
+test('stylesheet provides the standard screen-reader-only utility', async () => {
+  const source = await readSource('../src/styles.css');
+  const srOnlyRule = cssRuleBody(source, /\.sr-only/);
+
+  assert.match(srOnlyRule, /position:\s*absolute/);
+  assert.match(srOnlyRule, /width:\s*1px/);
+  assert.match(srOnlyRule, /height:\s*1px/);
+  assert.match(srOnlyRule, /overflow:\s*hidden/);
+  assert.match(srOnlyRule, /white-space:\s*nowrap/);
+  assert.match(srOnlyRule, /clip-path:\s*inset\(50%\)/);
+});
+
 test('assistant messages have top breathing room and a flat tool-source attachment', async () => {
   const source = await readSource('../src/styles.css');
 
