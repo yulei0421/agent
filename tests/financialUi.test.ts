@@ -7,6 +7,20 @@ async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
+function openingTagContaining(source: string, tagName: string, marker: RegExp): string {
+  const markerMatch = marker.exec(source);
+  const start = markerMatch ? source.lastIndexOf(`<${tagName}`, markerMatch.index) : -1;
+  if (start < 0) return '';
+
+  let braceDepth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === '{') braceDepth += 1;
+    if (source[index] === '}') braceDepth = Math.max(0, braceDepth - 1);
+    if (source[index] === '>' && braceDepth === 0) return source.slice(start, index + 1);
+  }
+  return '';
+}
+
 function streamResponse(events: string): Response {
   const body = new ReadableStream({
     start(controller) {
@@ -130,17 +144,36 @@ test('failed and stopped assistant messages expose a local retry action', async 
   assert.match(chat, /onRetry=\{onRetry\}/);
 });
 
-test('ChatWindow exposes bounded text and binary document attachments', async () => {
+test('ChatWindow exposes an accessible attachment picker', async () => {
+  const chat = await readSource('../src/components/ChatWindow.tsx');
+
+  assert.match(chat, /aria-label="添加附件"/);
+  assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
+});
+
+test('ChatWindow renders a dynamic attachment removal button inside the attachment chip', async () => {
+  const chat = await readSource('../src/components/ChatWindow.tsx');
+  const attachmentChip = chat.match(/<(span|div)\b[^>]*className="attachment-chip"[^>]*>[\s\S]*?<\/button>\s*<\/\1>/)?.[0] ?? '';
+  const removeAttachmentButtonStartTag = openingTagContaining(
+    attachmentChip,
+    'button',
+    /aria-label=\{`移除附件[^`]*\$\{attachment\.name\}[^`]*`\}/
+  );
+
+  assert.match(attachmentChip, /className="attachment-chip"/);
+  assert.match(removeAttachmentButtonStartTag, /^<button\b[\s\S]*>$/);
+  assert.match(removeAttachmentButtonStartTag, /aria-label=\{`移除附件[^`]*\$\{attachment\.name\}[^`]*`\}/);
+  assert.match(removeAttachmentButtonStartTag, /onClick=\{\(\)\s*=>\s*setAttachment\(null\)\}/);
+  assert.match(removeAttachmentButtonStartTag, /type="button"/);
+  assert.match(removeAttachmentButtonStartTag, /disabled=\{streaming\}/);
+});
+
+test('ChatWindow preserves bounded text and binary attachment ingestion', async () => {
   const [chat, attachment] = await Promise.all([
     readSource('../src/components/ChatWindow.tsx'),
     readSource('../src/lib/attachments.ts')
   ]);
-  const attachmentChip = chat.match(/<(span|div)\b[^>]*className="attachment-chip"[^>]*>[\s\S]*?<\/button>\s*<\/\1>/)?.[0] ?? '';
 
-  assert.match(chat, /aria-label="添加附件"/);
-  assert.match(attachmentChip, /className="attachment-chip"/);
-  assert.match(attachmentChip, /<button\b[\s\S]*aria-label=\{`移除附件[^`]*\$\{attachment\.name\}[^`]*`\}[\s\S]*<\/button>/);
-  assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
   assert.match(chat, /normalizeTextAttachment\(file\.name, await file\.text\(\)\)/);
   assert.match(chat, /toChatDocument\(attachment\)/);
   assert.match(chat, /ingestBinaryAttachment\(file\)/);

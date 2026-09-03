@@ -78,11 +78,11 @@ test('the compact composer exposes review mode as a pressed tool button without 
   const approvalButtonStartTag = openingTagContaining(
     chatWindow,
     'button',
-    /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/
+    /aria-label=\{approvalMode\s*\?\s*['"]关闭人工审批['"]\s*:\s*['"]开启人工审批['"]\}/
   );
 
   assert.match(approvalButtonStartTag, /^<button\b[\s\S]*>$/);
-  assert.match(approvalButtonStartTag, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
+  assert.match(approvalButtonStartTag, /aria-label=\{approvalMode\s*\?\s*['"]关闭人工审批['"]\s*:\s*['"]开启人工审批['"]\}/);
   assert.match(approvalButtonStartTag, /aria-pressed=\{approvalMode\}/);
   assert.match(approvalButtonStartTag, /disabled=\{streaming\}/);
   assert.match(approvalButtonStartTag, /onClick=\{\(\)\s*=>\s*onReviewModeChange\(!approvalMode\)\}/);
