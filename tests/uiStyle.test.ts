@@ -79,8 +79,8 @@ test('ChatWindow auto-sizes the textarea and keeps keyboard submission behavior'
   assert.match(textarea, /ref=\{textareaRef\}/);
   assert.match(textarea, /rows=\{1\}/);
   assert.match(textarea, /onKeyDown=\{\(event\)\s*=>\s*\{\s*if\s*\(\s*event\.key\s*!==\s*['\"]Enter['\"]\s*\|\|\s*event\.shiftKey\s*\|\|\s*event\.nativeEvent\.isComposing\s*\)\s*return;\s*event\.preventDefault\(\);\s*event\.currentTarget\.form\?\.requestSubmit\(\);\s*\}\}/);
-  assert.match(source, /textarea\.style\.height\s*=\s*`\$\{Math\.min\(textarea\.scrollHeight,\s*200\)\}px`/);
-  assert.match(source, /textarea\.style\.overflowY\s*=\s*textarea\.scrollHeight\s*>\s*200\s*\?\s*['"]auto['"]\s*:\s*['"]hidden['"]/);
+  assert.match(source, /const textarea = textareaRef\.current;/);
+  assert.match(source, /const textarea = textareaRef\.current;[\s\S]*?textarea\.style\.height\s*=\s*`\$\{Math\.min\(textarea\.scrollHeight,\s*200\)\}px`[\s\S]*?textarea\.style\.overflowY\s*=\s*textarea\.scrollHeight\s*>\s*200\s*\?\s*['"]auto['"]\s*:\s*['"]hidden['"]/);
 });
 
 test('MessageList renders variable-height messages directly and provides a new-session empty state', async () => {

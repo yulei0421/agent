@@ -6,6 +6,41 @@ async function source(path: string): Promise<string> {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
+function openingTagContaining(sourceText: string, tagName: string, marker: RegExp): string {
+  const markerMatch = marker.exec(sourceText);
+  const start = markerMatch ? sourceText.lastIndexOf(`<${tagName}`, markerMatch.index) : -1;
+  if (start < 0) return '';
+
+  let braceDepth = 0;
+  let quote: '"' | "'" | '`' | null = null;
+  let escaped = false;
+
+  for (let index = start; index < sourceText.length; index += 1) {
+    const character = sourceText[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === '`') {
+      quote = character;
+    } else if (character === '{') {
+      braceDepth += 1;
+    } else if (character === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+    } else if (character === '>' && braceDepth === 0) {
+      return sourceText.slice(start, index + 1);
+    }
+  }
+
+  return '';
+}
+
 test('chat streaming accepts an explicit review mode and routes approval events', async () => {
   const chat = await source('../src/lib/chat.ts');
 
@@ -40,18 +75,18 @@ test('streamChat sends the review flag only when requested', async () => {
 test('the compact composer exposes review mode as a pressed tool button without changing the automatic default', async () => {
   const chatWindow = await source('../src/components/ChatWindow.tsx');
   const app = await source('../src/App.tsx');
-  const approvalLabel = /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/.exec(chatWindow);
-  const approvalButtonStart = approvalLabel ? chatWindow.lastIndexOf('<button', approvalLabel.index) : -1;
-  const approvalButtonEnd = approvalLabel ? chatWindow.indexOf('</button>', approvalLabel.index) : -1;
-  const approvalButton = approvalButtonStart >= 0 && approvalButtonEnd >= 0
-    ? chatWindow.slice(approvalButtonStart, approvalButtonEnd + '</button>'.length)
-    : '';
+  const approvalButtonStartTag = openingTagContaining(
+    chatWindow,
+    'button',
+    /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/
+  );
 
-  assert.match(approvalButton, /^<button\b/);
-  assert.match(approvalButton, /aria-pressed=\{approvalMode\}/);
-  assert.match(approvalButton, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
-  assert.match(approvalButton, /disabled=\{streaming\}/);
-  assert.match(approvalButton, /onReviewModeChange\(!approvalMode\)/);
+  assert.match(approvalButtonStartTag, /^<button\b[\s\S]*>$/);
+  assert.match(approvalButtonStartTag, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
+  assert.match(approvalButtonStartTag, /aria-pressed=\{approvalMode\}/);
+  assert.match(approvalButtonStartTag, /disabled=\{streaming\}/);
+  assert.match(approvalButtonStartTag, /onClick=\{\(\)\s*=>\s*onReviewModeChange\(!approvalMode\)\}/);
+  assert.match(approvalButtonStartTag, /type="button"/);
   assert.match(app, /const \[reviewMode, setReviewMode\] = useState\(false\)/);
   assert.match(app, /reviewMode/);
 });
