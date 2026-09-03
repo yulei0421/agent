@@ -138,7 +138,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
               disabled={streaming}
               onClick={() => onReviewModeChange(!approvalMode)}
               type="button"
-              className="composer-icon-button"
+              className="composer-tool-button"
               title="执行工具前会等待批准"
             >
               <ShieldCheck aria-hidden="true" />
@@ -150,6 +150,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
               aria-label="停止生成"
               className="composer-submit stop"
               onClick={onStop}
+              title="停止生成"
               type="button"
             >
               <Square aria-hidden="true" />
@@ -159,6 +160,7 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
               aria-label="发送消息"
               className="composer-submit"
               disabled={attachmentLoading || !content.trim()}
+              title="发送消息"
               type="submit"
             >
               <Send aria-hidden="true" />
