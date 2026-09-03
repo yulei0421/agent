@@ -1,83 +1,33 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript/unstable/ast';
-import { API, type Snapshot } from 'typescript/unstable/sync';
 import { streamChat } from '../src/lib/chat.js';
-
-const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const tsconfigPath = fileURLToPath(new URL('../tsconfig.json', import.meta.url));
-const chatWindowPath = fileURLToPath(new URL('../src/components/ChatWindow.tsx', import.meta.url));
-let astApi: API | undefined;
-let astSnapshot: Snapshot | undefined;
+import {
+  closeSourceAst,
+  directArrowCall,
+  findNodes,
+  hasJsxAncestorWithStaticClassToken,
+  isIdentifier,
+  isJsxElementNamed,
+  jsxAttributeExpression,
+  jsxStaticAttribute,
+  sourceFile,
+  unwrapExpression
+} from './sourceAst.js';
 
 async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
 function chatWindowAst(): ts.SourceFile {
-  astApi ??= new API({ cwd: projectRoot });
-  astSnapshot ??= astApi.updateSnapshot({ openProjects: [tsconfigPath] });
-  const project = astSnapshot.getProject(tsconfigPath) ?? astSnapshot.getProjects()[0];
-  assert.ok(project, 'expected the TypeScript project to load');
-  const sourceFile = project.program.getSourceFile(chatWindowPath);
-  assert.ok(sourceFile, 'expected ChatWindow.tsx in the TypeScript project');
-  return sourceFile;
+  return sourceFile('src/components/ChatWindow.tsx');
 }
 
-test.after(() => {
-  astSnapshot?.dispose();
-  astApi?.close();
-});
-
-function findNodes<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) => node is T): T[] {
-  const matches: T[] = [];
-  const visit = (node: ts.Node): void => {
-    if (predicate(node)) matches.push(node);
-    node.forEachChild(visit);
-  };
-  visit(root);
-  return matches;
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  return ts.skipOuterExpressions(expression);
-}
-
-function isIdentifier(expression: ts.Expression, name: string): boolean {
-  const current = unwrapExpression(expression);
-  return ts.isIdentifier(current) && current.text === name;
-}
-
-function jsxAttribute(element: ts.JsxElement, name: string): ts.JsxAttribute | undefined {
-  return element.openingElement.attributes.properties.find(
-    (property): property is ts.JsxAttribute => (
-      ts.isJsxAttribute(property)
-      && ts.isIdentifier(property.name)
-      && property.name.text === name
-    )
-  );
-}
-
-function jsxAttributeExpression(element: ts.JsxElement, name: string): ts.Expression | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  return initializer && ts.isJsxExpression(initializer) && initializer.expression
-    ? initializer.expression
-    : undefined;
-}
-
-function jsxStaticAttribute(element: ts.JsxElement, name: string): string | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  return initializer && ts.isStringLiteral(initializer) ? initializer.text : undefined;
-}
+test.after(closeSourceAst);
 
 function isButton(node: ts.Node): node is ts.JsxElement {
-  return (
-    ts.isJsxElement(node)
-    && ts.isIdentifier(node.openingElement.tagName)
-    && node.openingElement.tagName.text === 'button'
-  );
+  return isJsxElementNamed(node, 'button');
 }
 
 function isProperty(expression: ts.Expression, owner: string, property: string): boolean {
@@ -96,36 +46,6 @@ function isAttachmentRemovalLabel(expression: ts.Expression): boolean {
     && current.head.text.startsWith('移除附件')
     && current.templateSpans.some((span) => isProperty(span.expression, 'attachment', 'name'))
   );
-}
-
-function callsSetAttachmentNull(expression: ts.Expression): boolean {
-  const current = unwrapExpression(expression);
-  if (!ts.isArrowFunction(current)) return false;
-  const body = current.body;
-  const calls = ts.isBlock(body)
-    ? body.statements
-      .filter(ts.isExpressionStatement)
-      .map((statement) => unwrapExpression(statement.expression))
-      .filter(ts.isCallExpression)
-    : ts.isCallExpression(unwrapExpression(body))
-      ? [unwrapExpression(body) as ts.CallExpression]
-      : [];
-  return calls.some((call) => {
-    const argument = call.arguments[0];
-    return (
-      isIdentifier(call.expression, 'setAttachment')
-      && Boolean(argument && argument.kind === ts.SyntaxKind.NullKeyword)
-    );
-  });
-}
-
-function hasJsxAncestorClass(node: ts.Node, className: string): boolean {
-  let current = node.parent;
-  while (current) {
-    if (ts.isJsxElement(current) && jsxStaticAttribute(current, 'className') === className) return true;
-    current = current.parent;
-  }
-  return false;
 }
 
 function streamResponse(events: string): Response {
@@ -270,9 +190,13 @@ test('ChatWindow renders a dynamic attachment removal button inside the attachme
 
   const disabled = jsxAttributeExpression(removeButton, 'disabled');
   const onClick = jsxAttributeExpression(removeButton, 'onClick');
-  assert.ok(hasJsxAncestorClass(removeButton, 'attachment-chip'));
+  assert.ok(hasJsxAncestorWithStaticClassToken(removeButton, 'attachment-chip'));
   assert.ok(disabled && isIdentifier(disabled, 'streaming'));
-  assert.ok(onClick && callsSetAttachmentNull(onClick));
+  assert.ok(onClick);
+  const removeCall = directArrowCall(onClick);
+  assert.ok(removeCall && isIdentifier(removeCall.expression, 'setAttachment'));
+  assert.equal(removeCall.arguments.length, 1);
+  assert.equal(removeCall.arguments[0]?.kind, ts.SyntaxKind.NullKeyword);
   assert.equal(jsxStaticAttribute(removeButton, 'type'), 'button');
 });
 

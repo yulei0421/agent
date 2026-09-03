@@ -1,152 +1,39 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript/unstable/ast';
-import { API, type Snapshot } from 'typescript/unstable/sync';
-
-const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const tsconfigPath = fileURLToPath(new URL('../tsconfig.json', import.meta.url));
-const chatWindowPath = fileURLToPath(new URL('../src/components/ChatWindow.tsx', import.meta.url));
-let astApi: API | undefined;
-let astSnapshot: Snapshot | undefined;
+import {
+  balancedBlock,
+  closeSourceAst,
+  findNodes,
+  hasStaticClassToken,
+  isIdentifier,
+  isJsxElementNamed,
+  jsxAttributeExpression,
+  jsxStaticAttribute,
+  sourceFile,
+  topLevelLogicalOrOperands,
+  unwrapExpression
+} from './sourceAst.js';
 
 async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
 function chatWindowAst(): ts.SourceFile {
-  astApi ??= new API({ cwd: projectRoot });
-  astSnapshot ??= astApi.updateSnapshot({ openProjects: [tsconfigPath] });
-  const project = astSnapshot.getProject(tsconfigPath) ?? astSnapshot.getProjects()[0];
-  assert.ok(project, 'expected the TypeScript project to load');
-  const sourceFile = project.program.getSourceFile(chatWindowPath);
-  assert.ok(sourceFile, 'expected ChatWindow.tsx in the TypeScript project');
-  return sourceFile;
+  return sourceFile('src/components/ChatWindow.tsx');
 }
 
-test.after(() => {
-  astSnapshot?.dispose();
-  astApi?.close();
-});
+test.after(closeSourceAst);
 
 function cssRuleBody(source: string, selector: RegExp): string {
   const flags = selector.flags.replace(/[gy]/g, '');
   return new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`, flags).exec(source)?.[1] ?? '';
 }
 
-function balancedBlock(source: string, marker: string): string {
-  const markerStart = source.indexOf(marker);
-  const blockStart = markerStart >= 0 ? source.indexOf('{', markerStart + marker.length) : -1;
-  if (blockStart < 0) return '';
-
-  let depth = 0;
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-  let lineComment = false;
-  let blockComment = false;
-
-  for (let index = blockStart; index < source.length; index += 1) {
-    const character = source[index];
-    const next = source[index + 1];
-    if (lineComment) {
-      if (character === '\n') lineComment = false;
-      continue;
-    }
-    if (blockComment) {
-      if (character === '*' && next === '/') {
-        blockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === '/' && next === '/') {
-      lineComment = true;
-      index += 1;
-    } else if (character === '/' && next === '*') {
-      blockComment = true;
-      index += 1;
-    } else if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === '{') {
-      depth += 1;
-    } else if (character === '}') {
-      depth -= 1;
-      if (depth === 0) return source.slice(markerStart, index + 1);
-    }
-  }
-
-  return '';
-}
-
-function findNodes<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) => node is T): T[] {
-  const matches: T[] = [];
-  const visit = (node: ts.Node): void => {
-    if (predicate(node)) matches.push(node);
-    node.forEachChild(visit);
-  };
-  visit(root);
-  return matches;
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  return ts.skipOuterExpressions(expression);
-}
-
-function jsxAttribute(element: ts.JsxElement, name: string): ts.JsxAttribute | undefined {
-  return element.openingElement.attributes.properties.find(
-    (property): property is ts.JsxAttribute => (
-      ts.isJsxAttribute(property)
-      && ts.isIdentifier(property.name)
-      && property.name.text === name
-    )
-  );
-}
-
-function jsxAttributeExpression(element: ts.JsxElement, name: string): ts.Expression | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  return initializer && ts.isJsxExpression(initializer) && initializer.expression
-    ? initializer.expression
-    : undefined;
-}
-
-function jsxStaticAttribute(element: ts.JsxElement, name: string): string | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  if (!initializer) return undefined;
-  if (ts.isStringLiteral(initializer)) return initializer.text;
-  if (ts.isJsxExpression(initializer) && initializer.expression) {
-    const expression = unwrapExpression(initializer.expression);
-    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text;
-  }
-  return undefined;
-}
-
-function isJsxElementNamed(node: ts.Node, name: string): node is ts.JsxElement {
-  return (
-    ts.isJsxElement(node)
-    && ts.isIdentifier(node.openingElement.tagName)
-    && node.openingElement.tagName.text === name
-  );
-}
-
 function jsxButtonBranch(expression: ts.Expression): ts.JsxElement | undefined {
   const current = unwrapExpression(expression);
   return isJsxElementNamed(current, 'button') ? current : undefined;
-}
-
-function isIdentifier(expression: ts.Expression, name: string): boolean {
-  const current = unwrapExpression(expression);
-  return ts.isIdentifier(current) && current.text === name;
 }
 
 function isNumericValue(expression: ts.Expression, value: number): boolean {
@@ -227,56 +114,17 @@ function isOverflowCalculation(expression: ts.Expression, textareaName: string):
   );
 }
 
-function expressionCallsTarget(
-  sourceFile: ts.SourceFile,
-  expression: ts.Expression,
-  targetName: string,
-  seen = new Set<string>()
-): boolean {
+function isNegatedContentTrim(expression: ts.Expression): boolean {
   const current = unwrapExpression(expression);
-  if (ts.isIdentifier(current)) {
-    if (current.text === targetName) return true;
-    if (seen.has(current.text)) return false;
-    seen.add(current.text);
-    const declarations = findNodes(sourceFile, (node): node is ts.FunctionDeclaration | ts.VariableDeclaration => (
-      (ts.isFunctionDeclaration(node) && Boolean(node.name?.text === current.text))
-      || (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === current.text)
-    ));
-    return declarations.some((declaration) => {
-      if (ts.isFunctionDeclaration(declaration)) {
-        return Boolean(declaration.body && nodeCallsTarget(sourceFile, declaration.body, targetName, seen));
-      }
-      return Boolean(declaration.initializer && nodeCallsTarget(sourceFile, declaration.initializer, targetName, seen));
-    });
-  }
-  return nodeCallsTarget(sourceFile, current, targetName, seen);
-}
-
-function nodeCallsTarget(
-  sourceFile: ts.SourceFile,
-  node: ts.Node,
-  targetName: string,
-  seen: Set<string>
-): boolean {
-  return findNodes(node, ts.isCallExpression).some((call) => {
-    const callee = unwrapExpression(call.expression);
-    return ts.isIdentifier(callee)
-      && (callee.text === targetName || expressionCallsTarget(sourceFile, callee, targetName, seen));
-  });
-}
-
-function containsNegatedContentTrim(expression: ts.Expression): boolean {
-  return findNodes(expression, ts.isPrefixUnaryExpression).some((prefix) => {
-    if (prefix.operator !== ts.SyntaxKind.ExclamationToken) return false;
-    const operand = unwrapExpression(prefix.operand);
-    if (!ts.isCallExpression(operand)) return false;
-    const callee = unwrapExpression(operand.expression);
-    return (
-      ts.isPropertyAccessExpression(callee)
-      && callee.name.text === 'trim'
-      && isIdentifier(callee.expression, 'content')
-    );
-  });
+  if (!ts.isPrefixUnaryExpression(current) || current.operator !== ts.SyntaxKind.ExclamationToken) return false;
+  const operand = unwrapExpression(current.operand);
+  if (!ts.isCallExpression(operand) || operand.arguments.length !== 0) return false;
+  const callee = unwrapExpression(operand.expression);
+  return (
+    ts.isPropertyAccessExpression(callee)
+    && callee.name.text === 'trim'
+    && isIdentifier(callee.expression, 'content')
+  );
 }
 
 test('ChatWindow forwards streaming state to MessageList', async () => {
@@ -352,7 +200,7 @@ test('ChatWindow renders exactly one compact toolbar without legacy composer sec
   const source = await readSource('../src/components/ChatWindow.tsx');
   const sourceFile = chatWindowAst();
   const toolbars = findNodes(sourceFile, (node): node is ts.JsxElement => (
-    ts.isJsxElement(node) && jsxStaticAttribute(node, 'className') === 'composer-toolbar'
+    ts.isJsxElement(node) && hasStaticClassToken(node, 'composer-toolbar')
   ));
 
   assert.equal(toolbars.length, 1);
@@ -364,18 +212,14 @@ test('ChatWindow renders exactly one compact toolbar without legacy composer sec
 test('composer toolbar switches between stop and send button branches while streaming', async () => {
   const sourceFile = chatWindowAst();
   const toolbars = findNodes(sourceFile, (node): node is ts.JsxElement => (
-    ts.isJsxElement(node) && jsxStaticAttribute(node, 'className') === 'composer-toolbar'
+    ts.isJsxElement(node) && hasStaticClassToken(node, 'composer-toolbar')
   ));
   assert.equal(toolbars.length, 1);
   const toolbar = toolbars[0];
   assert.ok(toolbar);
 
   const streamingConditions = findNodes(toolbar, ts.isConditionalExpression).filter(
-    (conditional) => (
-      isIdentifier(conditional.condition, 'streaming')
-      && ts.isJsxExpression(conditional.parent)
-      && conditional.parent.parent === toolbar
-    )
+    (conditional) => isIdentifier(conditional.condition, 'streaming')
   );
   assert.equal(streamingConditions.length, 1);
   const streamingCondition = streamingConditions[0];
@@ -389,14 +233,19 @@ test('composer toolbar switches between stop and send button branches while stre
   assert.equal(jsxStaticAttribute(stopButton, 'aria-label'), '停止生成');
   assert.equal(jsxStaticAttribute(stopButton, 'type'), 'button');
   const stopClick = jsxAttributeExpression(stopButton, 'onClick');
-  assert.ok(stopClick && expressionCallsTarget(sourceFile, stopClick, 'onStop'));
+  assert.ok(stopClick && isIdentifier(stopClick, 'onStop'));
 
   assert.equal(jsxStaticAttribute(sendButton, 'aria-label'), '发送消息');
   assert.equal(jsxStaticAttribute(sendButton, 'type'), 'submit');
   const sendDisabled = jsxAttributeExpression(sendButton, 'disabled');
   assert.ok(sendDisabled);
-  assert.ok(findNodes(sendDisabled, ts.isIdentifier).some((identifier) => identifier.text === 'attachmentLoading'));
-  assert.ok(containsNegatedContentTrim(sendDisabled));
+  const disabledOperands = topLevelLogicalOrOperands(sendDisabled);
+  assert.ok(disabledOperands);
+  const [left, right] = disabledOperands;
+  assert.ok(
+    (isIdentifier(left, 'attachmentLoading') && isNegatedContentTrim(right))
+    || (isNegatedContentTrim(left) && isIdentifier(right, 'attachmentLoading'))
+  );
 });
 
 test('ChatWindow textarea keeps compact rows and keyboard submission behavior', async () => {

@@ -1,82 +1,31 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript/unstable/ast';
-import { API, type Snapshot } from 'typescript/unstable/sync';
-
-const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const tsconfigPath = fileURLToPath(new URL('../tsconfig.json', import.meta.url));
-const chatWindowPath = fileURLToPath(new URL('../src/components/ChatWindow.tsx', import.meta.url));
-let astApi: API | undefined;
-let astSnapshot: Snapshot | undefined;
+import {
+  closeSourceAst,
+  directArrowCall,
+  findNodes,
+  isIdentifier,
+  isJsxElementNamed,
+  jsxAttributeExpression,
+  jsxStaticAttribute,
+  sourceFile,
+  unwrapExpression
+} from './sourceAst.js';
 
 async function source(path: string): Promise<string> {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
 
 function chatWindowAst(): ts.SourceFile {
-  astApi ??= new API({ cwd: projectRoot });
-  astSnapshot ??= astApi.updateSnapshot({ openProjects: [tsconfigPath] });
-  const project = astSnapshot.getProject(tsconfigPath) ?? astSnapshot.getProjects()[0];
-  assert.ok(project, 'expected the TypeScript project to load');
-  const sourceFile = project.program.getSourceFile(chatWindowPath);
-  assert.ok(sourceFile, 'expected ChatWindow.tsx in the TypeScript project');
-  return sourceFile;
+  return sourceFile('src/components/ChatWindow.tsx');
 }
 
-test.after(() => {
-  astSnapshot?.dispose();
-  astApi?.close();
-});
-
-function findNodes<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) => node is T): T[] {
-  const matches: T[] = [];
-  const visit = (node: ts.Node): void => {
-    if (predicate(node)) matches.push(node);
-    node.forEachChild(visit);
-  };
-  visit(root);
-  return matches;
-}
-
-function unwrapExpression(expression: ts.Expression): ts.Expression {
-  return ts.skipOuterExpressions(expression);
-}
-
-function isIdentifier(expression: ts.Expression, name: string): boolean {
-  const current = unwrapExpression(expression);
-  return ts.isIdentifier(current) && current.text === name;
-}
-
-function jsxAttribute(element: ts.JsxElement, name: string): ts.JsxAttribute | undefined {
-  return element.openingElement.attributes.properties.find(
-    (property): property is ts.JsxAttribute => (
-      ts.isJsxAttribute(property)
-      && ts.isIdentifier(property.name)
-      && property.name.text === name
-    )
-  );
-}
-
-function jsxAttributeExpression(element: ts.JsxElement, name: string): ts.Expression | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  return initializer && ts.isJsxExpression(initializer) && initializer.expression
-    ? initializer.expression
-    : undefined;
-}
-
-function jsxStaticAttribute(element: ts.JsxElement, name: string): string | undefined {
-  const initializer = jsxAttribute(element, name)?.initializer;
-  return initializer && ts.isStringLiteral(initializer) ? initializer.text : undefined;
-}
+test.after(closeSourceAst);
 
 function isButton(node: ts.Node): node is ts.JsxElement {
-  return (
-    ts.isJsxElement(node)
-    && ts.isIdentifier(node.openingElement.tagName)
-    && node.openingElement.tagName.text === 'button'
-  );
+  return isJsxElementNamed(node, 'button');
 }
 
 function isStringValue(expression: ts.Expression, value: string): boolean {
@@ -97,31 +46,6 @@ function isApprovalLabel(expression: ts.Expression): boolean {
   );
 }
 
-function callsApprovalToggle(expression: ts.Expression): boolean {
-  const current = unwrapExpression(expression);
-  if (!ts.isArrowFunction(current)) return false;
-  const body = current.body;
-  const calls = ts.isBlock(body)
-    ? body.statements
-      .filter(ts.isExpressionStatement)
-      .map((statement) => unwrapExpression(statement.expression))
-      .filter(ts.isCallExpression)
-    : ts.isCallExpression(unwrapExpression(body))
-      ? [unwrapExpression(body) as ts.CallExpression]
-      : [];
-  return calls.some((call) => {
-    if (!isIdentifier(call.expression, 'onReviewModeChange')) return false;
-    const argument = call.arguments[0];
-    if (!argument) return false;
-    const toggledMode = unwrapExpression(argument);
-    return (
-      ts.isPrefixUnaryExpression(toggledMode)
-      && toggledMode.operator === ts.SyntaxKind.ExclamationToken
-      && isIdentifier(toggledMode.operand, 'approvalMode')
-    );
-  });
-}
-
 test('the compact composer exposes review mode as one pressed tool button', () => {
   const sourceFile = chatWindowAst();
   const approvalButtons = findNodes(sourceFile, isButton).filter((button) => {
@@ -137,7 +61,18 @@ test('the compact composer exposes review mode as one pressed tool button', () =
   const onClick = jsxAttributeExpression(approvalButton, 'onClick');
   assert.ok(pressed && isIdentifier(pressed, 'approvalMode'));
   assert.ok(disabled && isIdentifier(disabled, 'streaming'));
-  assert.ok(onClick && callsApprovalToggle(onClick));
+  assert.ok(onClick);
+  const toggleCall = directArrowCall(onClick);
+  assert.ok(toggleCall && isIdentifier(toggleCall.expression, 'onReviewModeChange'));
+  assert.equal(toggleCall.arguments.length, 1);
+  const toggledMode = toggleCall.arguments[0];
+  assert.ok(toggledMode);
+  const toggleOperand = unwrapExpression(toggledMode);
+  assert.ok(
+    ts.isPrefixUnaryExpression(toggleOperand)
+    && toggleOperand.operator === ts.SyntaxKind.ExclamationToken
+    && isIdentifier(toggleOperand.operand, 'approvalMode')
+  );
   assert.equal(jsxStaticAttribute(approvalButton, 'type'), 'button');
 });
 
