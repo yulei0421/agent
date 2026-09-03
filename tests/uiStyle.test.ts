@@ -196,6 +196,14 @@ test('composer icon buttons expose a visible focus-within ring', async () => {
   assert.match(focusRule, /outline-offset:\s*2px/);
 });
 
+test('composer focus ring remains visible above its background veil', async () => {
+  const source = await readSource('../src/styles.css');
+  const focusRule = cssRuleBody(source, /\.composer:focus-within/);
+
+  assert.match(focusRule, /outline:\s*3px\s+solid\s+rgba\(15,\s*118,\s*110,\s*0\.28\)/);
+  assert.match(focusRule, /outline-offset:\s*2px/);
+});
+
 test('composer adds a subtle non-interactive background veil above the input', async () => {
   const source = await readSource('../src/styles.css');
   const veilRule = cssRuleBody(source, /\.composer::before/);
@@ -222,6 +230,23 @@ test('stylesheet provides the standard screen-reader-only utility', async () => 
   assert.match(srOnlyRule, /clip-path:\s*inset\(50%\)/);
 });
 
+test('attachment errors wrap unbroken messages within the compact composer', async () => {
+  const source = await readSource('../src/styles.css');
+  const errorRule = cssRuleBody(source, /\.attachment-error/);
+
+  assert.match(errorRule, /min-width:\s*0/);
+  assert.match(errorRule, /max-width:\s*100%/);
+  assert.match(errorRule, /overflow-wrap:\s*anywhere/);
+});
+
+test('disabled attachment labels do not receive composer icon hover styles', async () => {
+  const source = await readSource('../src/styles.css');
+  const hoverRule = cssRuleBody(source, /\.composer-icon-button:hover:not\(\[aria-disabled="true"\]\)/);
+
+  assert.match(hoverRule, /background:\s*var\(--accent-pale\)/);
+  assert.match(hoverRule, /color:\s*var\(--accent-deep\)/);
+});
+
 test('assistant messages have top breathing room and a flat tool-source attachment', async () => {
   const source = await readSource('../src/styles.css');
 
@@ -241,6 +266,46 @@ test('ChatWindow renders exactly one compact toolbar without legacy composer sec
   assert.doesNotMatch(source, /className="web-search-control"/);
   assert.doesNotMatch(source, /className="composer-context-note"/);
   assert.doesNotMatch(source, /className="composer-actions"/);
+});
+
+test('ChatWindow keeps attachment updates in a persistent polite live region', () => {
+  const sourceFile = chatWindowAst();
+  const liveRegions = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    ts.isJsxElement(node)
+    && isJsxElementNamed(node, 'span')
+    && hasStaticClassToken(node, 'sr-only')
+    && jsxStaticAttribute(node, 'aria-live') === 'polite'
+  ));
+
+  assert.equal(liveRegions.length, 1);
+  const liveRegion = liveRegions[0];
+  assert.ok(liveRegion);
+  assert.equal(jsxStaticAttribute(liveRegion, 'aria-atomic'), 'true');
+  assert.equal(jsxStaticAttribute(liveRegion, 'role'), undefined);
+  assert.ok(liveRegion.parent && isJsxElementNamed(liveRegion.parent, 'form'));
+  assert.match(
+    liveRegion.getText(sourceFile),
+    /\{attachmentLoading\s*\?\s*'正在解析附件'\s*:\s*attachment\s*\?\s*`已添加附件\s+\$\{attachment\.name\}`\s*:\s*''\}/
+  );
+  assert.doesNotMatch(liveRegion.getText(sourceFile), /attachmentError/);
+  assert.equal(findNodes(liveRegion, (node): node is ts.JsxElement => isJsxElementNamed(node, 'button')).length, 0);
+
+  const errors = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    ts.isJsxElement(node) && hasStaticClassToken(node, 'attachment-error')
+  ));
+  assert.equal(errors.length, 1);
+  const error = errors[0];
+  assert.ok(error);
+  assert.equal(jsxStaticAttribute(error, 'role'), 'alert');
+});
+
+test('ChatWindow announces loading before parsing text attachments', async () => {
+  const source = await readSource('../src/components/ChatWindow.tsx');
+
+  assert.match(
+    source,
+    /setAttachmentLoading\(true\)[\s\S]*?normalizeTextAttachment\(file\.name, await file\.text\(\)\)/
+  );
 });
 
 test('composer toolbar switches between stop and send button branches while streaming', async () => {

@@ -39,18 +39,18 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
     event.currentTarget.value = '';
     setAttachmentError('');
     if (!file) return;
-    const isText = /\.(?:txt|md|markdown|csv|json)$/iu.test(file.name);
-    if (isText) {
-      const next = normalizeTextAttachment(file.name, await file.text());
-      if (!next) {
-        setAttachmentError('仅支持非空 TXT、MD、CSV、JSON 文件，且内容不超过 3500 个字符。');
-        return;
-      }
-      setAttachment(next);
-      return;
-    }
     setAttachmentLoading(true);
     try {
+      const isText = /\.(?:txt|md|markdown|csv|json)$/iu.test(file.name);
+      if (isText) {
+        const next = normalizeTextAttachment(file.name, await file.text());
+        if (!next) {
+          setAttachmentError('仅支持非空 TXT、MD、CSV、JSON 文件，且内容不超过 3500 个字符。');
+          return;
+        }
+        setAttachment(next);
+        return;
+      }
       setAttachment(await ingestBinaryAttachment(file));
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : '附件解析失败');
@@ -91,6 +91,9 @@ export function ChatWindow({ messages, streaming, financialMode, financialSymbol
           }}
           placeholder={placeholder}
         />
+        <span aria-atomic="true" aria-live="polite" className="sr-only">
+          {attachmentLoading ? '正在解析附件' : attachment ? `已添加附件 ${attachment.name}` : ''}
+        </span>
         {(attachmentLoading || attachment || attachmentError) && (
           <div className="composer-status-row">
             {attachmentLoading && (
