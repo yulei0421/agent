@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { resolveDesktopEnvironmentFile } from '../electron/environment.js';
 import { createSidecarEnvironment } from '../electron/sidecar.js';
 import { loadConfiguredEnv } from '../server/env.js';
 
@@ -35,4 +36,31 @@ test('forwards the explicit env file when Electron launches the sidecar', () => 
   assert.equal(environment.CLIENT_URL, 'http://127.0.0.1:45678');
   assert.equal(environment.DESKTOP_SESSION_TOKEN, 'desktop-token-1234567890');
   assert.equal(environment.STATIC_RENDERER_DIR, '/tmp/renderer');
+});
+
+test('finds the branded desktop env file when Electron userData uses the package name', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'deepseek-agent-desktop-paths-'));
+  const actualUserData = join(directory, 'deepseek-agent-demo');
+  const brandedUserData = join(directory, 'DeepSeek Agent');
+  const brandedEnvironmentFile = join(brandedUserData, '.env');
+  await mkdir(brandedUserData, { recursive: true });
+  await writeFile(brandedEnvironmentFile, 'DEEPSEEK_API_KEY=test-key\n');
+  try {
+    assert.equal(resolveDesktopEnvironmentFile({
+      userDataDirectory: actualUserData,
+      brandedUserDataDirectory: brandedUserData,
+      applicationDirectory: join(directory, 'app.asar')
+    }), brandedEnvironmentFile);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects a missing explicitly configured desktop env file', () => {
+  assert.throws(() => resolveDesktopEnvironmentFile({
+    configuredFile: '/missing/deepseek-agent.env',
+    userDataDirectory: '/tmp/deepseek-agent-demo',
+    brandedUserDataDirectory: '/tmp/DeepSeek Agent',
+    applicationDirectory: '/tmp/app.asar'
+  }), /AGENT_ENV_FILE does not exist/u);
 });

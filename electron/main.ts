@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, session } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveDesktopEnvironmentFile } from './environment.js';
 import { createSidecarLaunchOptions, findAvailableLoopbackPort, startDesktopSidecar, type DesktopSidecar } from './sidecar.js';
 
 const developmentUrl = process.env.ELECTRON_RENDERER_URL;
@@ -8,15 +9,6 @@ const DESKTOP_SESSION_HEADER = 'x-desktop-session-token';
 const currentDirectory = __dirname;
 let sidecar: DesktopSidecar | undefined;
 let mainWindow: BrowserWindow | undefined;
-
-function resolveEnvironmentFile(): string | undefined {
-  const configured = process.env.AGENT_ENV_FILE?.trim();
-  if (configured) return configured;
-  const userEnvironmentFile = join(app.getPath('userData'), '.env');
-  if (existsSync(userEnvironmentFile)) return userEnvironmentFile;
-  const developmentEnvironmentFile = join(app.getAppPath(), '.env');
-  return existsSync(developmentEnvironmentFile) ? developmentEnvironmentFile : undefined;
-}
 
 function allowedUrl(url: string, origin: string): boolean {
   return url === origin || url.startsWith(`${origin}/`);
@@ -65,7 +57,12 @@ async function openDesktopWindow(): Promise<void> {
   sidecar = await startDesktopSidecar({
     ...options,
     executablePath: process.execPath,
-    environmentFile: resolveEnvironmentFile(),
+    environmentFile: resolveDesktopEnvironmentFile({
+      configuredFile: process.env.AGENT_ENV_FILE,
+      userDataDirectory: app.getPath('userData'),
+      brandedUserDataDirectory: join(app.getPath('appData'), 'DeepSeek Agent'),
+      applicationDirectory: app.getAppPath()
+    }),
     workingDirectory: app.getPath('userData')
   });
   installDesktopSessionHeader(sidecar.origin, sidecar.token);

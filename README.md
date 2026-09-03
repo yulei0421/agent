@@ -211,13 +211,13 @@ pnpm client
 
 Electron 桌面端由主进程启动 Nest sidecar，等待健康检查后加载 Vite 构建产物；React、IndexedDB、SSE、WebSocket、PDF/OCR、Playwright 和 LangGraph 业务无需重写。桌面端不会把 API Key 打进安装包：sidecar 会按以下优先级读取配置——继承的进程环境变量、`AGENT_ENV_FILE` 指定的文件、用户数据目录 `.env`、开发目录 `.env`。
 
-首次使用已安装客户端时，请在对应用户数据目录创建 `.env` 并填写 `DEEPSEEK_API_KEY`：
+首次使用已安装客户端时，请在 Electron 实际用户数据目录创建 `.env` 并填写 `DEEPSEEK_API_KEY`：
 
-- macOS：`~/Library/Application Support/DeepSeek Agent/.env`
-- Windows：`%APPDATA%/DeepSeek Agent/.env`
-- Linux：`~/.config/DeepSeek Agent/.env`
+- macOS：`~/Library/Application Support/deepseek-agent-demo/.env`
+- Windows：`%APPDATA%/deepseek-agent-demo/.env`
+- Linux：`~/.config/deepseek-agent-demo/.env`
 
-也可以通过 `AGENT_ENV_FILE` 指定其它配置文件路径。不要把真实 API Key 放入安装包或提交到 Git。
+桌面端也兼容 `DeepSeek Agent/.env` 品牌目录和开发目录 `.env`。还可以通过 `AGENT_ENV_FILE` 指定其它配置文件路径；路径不存在时客户端会直接显示配置错误。不要把真实 API Key 放入安装包或提交到 Git。
 
 | 方法与路径 | 用途 | 返回 |
 | --- | --- | --- |
