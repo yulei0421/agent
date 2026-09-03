@@ -189,15 +189,48 @@ function isAttachmentAnnouncementState(declaration: ts.VariableDeclaration): boo
   );
 }
 
-function isAnnouncementTemplate(expression: ts.Expression): boolean {
+function isAnnouncementTemplate(expression: ts.Expression, attachmentName: string): boolean {
   const current = unwrapExpression(expression);
   const [span] = ts.isTemplateExpression(current) ? current.templateSpans : [];
   return (
     ts.isTemplateExpression(current)
     && current.head.text === '已添加附件 '
     && current.templateSpans.length === 1
-    && Boolean(span && isProperty(span.expression, 'next', 'name'))
+    && Boolean(span && isProperty(span.expression, attachmentName, 'name'))
   );
+}
+
+function directCallIndex(
+  statements: readonly ts.Statement[],
+  name: string,
+  argument: (value: ts.Expression) => boolean
+): number {
+  return statements.findIndex((statement) => directCallStatement(statement, name, argument));
+}
+
+function parserResultBinding(
+  statements: readonly ts.Statement[],
+  parserName: string
+): { index: number; name: string } {
+  const matches: { index: number; name: string }[] = [];
+  statements.forEach((statement, index) => {
+    if (!ts.isVariableStatement(statement)) return;
+    statement.declarationList.declarations.forEach((declaration) => {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) return;
+      const initializer = unwrapExpression(declaration.initializer);
+      const parserCall = ts.isAwaitExpression(initializer)
+        ? unwrapExpression(initializer.expression)
+        : initializer;
+      if (ts.isCallExpression(parserCall) && isIdentifier(parserCall.expression, parserName)) {
+        matches.push({ index, name: declaration.name.text });
+      }
+    });
+  });
+  assert.equal(matches.length, 1);
+  const match = matches[0];
+  assert.ok(match);
+  if (!match) throw new Error(`expected one ${parserName} result binding`);
+  return match;
 }
 
 function jsxBlockArrowBody(expression: ts.Expression | undefined): ts.Block {
@@ -389,7 +422,7 @@ test('ChatWindow keeps attachment updates in a persistent polite live region', (
   assert.equal(jsxStaticAttribute(error, 'role'), 'alert');
 });
 
-test('ChatWindow scopes both attachment parser paths to one loading lifecycle', () => {
+test('ChatWindow binds attachment updates and announcements to each parser branch', () => {
   const handler = functionDeclarationNamed(chatWindowAst(), 'handleAttachmentChange');
   assert.ok(handler.body);
   const statements = [...handler.body.statements];
@@ -406,19 +439,51 @@ test('ChatWindow scopes both attachment parser paths to one loading lifecycle', 
   assert.ok(loadingStartIndex > announcementResetIndex);
   assert.ok(parsingTryIndex > loadingStartIndex);
   assert.ok(parsingTry && ts.isTryStatement(parsingTry));
-  assert.ok(callsNamed(parsingTry.tryBlock, 'normalizeTextAttachment').length > 0);
-  assert.ok(callsNamed(parsingTry.tryBlock, 'ingestBinaryAttachment').length > 0);
+  const tryStatements = [...parsingTry.tryBlock.statements];
+  const textBranchIndex = tryStatements.findIndex((statement) => (
+    ts.isIfStatement(statement) && isIdentifier(statement.expression, 'isText')
+  ));
+  const textBranch = tryStatements[textBranchIndex];
+  assert.ok(textBranch && ts.isIfStatement(textBranch) && ts.isBlock(textBranch.thenStatement));
+  if (!textBranch || !ts.isIfStatement(textBranch) || !ts.isBlock(textBranch.thenStatement)) {
+    throw new Error('expected an isText block');
+  }
+  const textStatements = [...textBranch.thenStatement.statements];
+  const textResult = parserResultBinding(textStatements, 'normalizeTextAttachment');
+  const textAttachmentIndex = directCallIndex(
+    textStatements,
+    'setAttachment',
+    (argument) => isIdentifier(argument, textResult.name)
+  );
+  const textAnnouncementIndex = directCallIndex(
+    textStatements,
+    'setAttachmentAnnouncement',
+    (argument) => isAnnouncementTemplate(argument, textResult.name)
+  );
+  assert.ok(textAttachmentIndex > textResult.index);
+  assert.ok(textAnnouncementIndex > textAttachmentIndex);
+
+  const binaryStatements = tryStatements.slice(textBranchIndex + 1);
+  const binaryResult = parserResultBinding(binaryStatements, 'ingestBinaryAttachment');
+  const binaryAttachmentIndex = directCallIndex(
+    binaryStatements,
+    'setAttachment',
+    (argument) => isIdentifier(argument, binaryResult.name)
+  );
+  const binaryAnnouncementIndex = directCallIndex(
+    binaryStatements,
+    'setAttachmentAnnouncement',
+    (argument) => isAnnouncementTemplate(argument, binaryResult.name)
+  );
+  assert.ok(binaryAttachmentIndex > binaryResult.index);
+  assert.ok(binaryAnnouncementIndex > binaryAttachmentIndex);
+
   const finallyBlock = parsingTry.finallyBlock;
   assert.ok(finallyBlock);
   assert.ok(callsNamed(finallyBlock, 'setAttachmentLoading').some((call) => (
     Boolean(call.arguments[0] && isBooleanValue(call.arguments[0], false))
   )));
 
-  const successAnnouncements = callsNamed(parsingTry.tryBlock, 'setAttachmentAnnouncement');
-  assert.equal(successAnnouncements.length, 2);
-  assert.ok(successAnnouncements.every((call) => (
-    Boolean(call.arguments[0] && isAnnouncementTemplate(call.arguments[0]))
-  )));
   const catchClause = parsingTry.catchClause;
   assert.ok(catchClause);
   assert.equal(callsNamed(catchClause.block, 'setAttachmentAnnouncement').length, 0);
