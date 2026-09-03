@@ -43,3 +43,32 @@
 - [x] 桌面浏览器交互和控制台检查。
 
 final result: passed
+
+## 2026-09-03 Codex 风格紧凑输入区
+
+### 环境与证据
+
+- 本地开发服务：`http://127.0.0.1:5173/`（Nest 服务：`http://127.0.0.1:8787`）。
+- 桌面截图：`/tmp/deepseek-compact-composer-desktop.png`。
+- 长输入、审批和附件截图：`/tmp/deepseek-compact-composer-states.png`。
+- 移动截图：`/tmp/deepseek-compact-composer-mobile.png`。
+
+### 桌面验收（1440 x 900）
+
+- 空输入的 composer 实测 `760 x 106px`，文本域为 `40px`，仅保留文本域和单层工具栏；旧模型工具说明、常驻审批卡、上下文说明及双操作按钮均不存在。
+- 十行文本时，文本域实测为 `200px`，内容高度为 `256px`，`overflow-y: auto`；消息列表保持独立 `overflow-y: auto`，聊天面板为 `overflow: hidden`。
+- 焦点态为单一 `3px` 绿色 outline，带 `2px` offset；未再出现双重焦点环。
+- 审批按钮切换后 `aria-pressed="true"`；最长文本附件成功显示 chip，并可移除。附件完成状态由 polite live region 播报。
+- 本地后端未配置模型，真实请求会立即返回 `model_unavailable`，无法观察持续的真实流式生成。使用延迟拦截 `/api/chat/stream` 验证界面状态：停止按钮可见、已启用、尺寸 `44 x 44px`，点击后发送按钮原位恢复。
+
+### 移动验收（390 x 844，补充 320 x 844）
+
+- 390px：页面与 body 宽度均为 `390px`；composer 为 `370px`，长文件名 chip 为 `332px`，没有页面级横向滚动、遮挡或双全宽操作按钮。
+- 320px：页面与 body 宽度均为 `320px`；composer 为 `300px`，chip 为 `262px`。附件、审批和发送控件分别为 `44 x 44px`、`70 x 44px`、`44 x 44px`，均可触达。
+- 所有关键状态均完成实际页面检查：空输入、长输入、审批开启、长文本附件、附件移除、焦点、模拟流式停止、390px 与 320px 窄屏。
+
+### 自动验证
+
+- `pnpm test`：432/432 通过。
+- `pnpm typecheck`：通过。
+- `pnpm build`：通过。
