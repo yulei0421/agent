@@ -9,6 +9,17 @@ test('normalizes bounded local text attachments', () => {
   assert.equal(normalizeTextAttachment('large.txt', 'x'.repeat(MAX_TEXT_ATTACHMENT_CHARS + 1)), null);
 });
 
+test('preserves supported extensions when truncating long text attachment names', () => {
+  for (const extension of ['txt', 'md', 'csv', 'json']) {
+    const attachment = normalizeTextAttachment(`${'a'.repeat(129)}.${extension}`, '附件内容');
+    const expectedName = `${'a'.repeat(95 - extension.length)}.${extension}`;
+
+    assert.ok(attachment);
+    assert.equal(attachment.name, expectedName);
+    assert.equal(attachment.content, '附件内容');
+  }
+});
+
 test('retrieves relevant bounded snippets from previously attached local documents', () => {
   const documents = [
     { name: 'risk.md', mimeType: 'text/markdown' as const, text: '风险提示：数据可能延迟。\n\n估值需要结合现金流。' },

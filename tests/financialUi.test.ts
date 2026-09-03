@@ -1,10 +1,56 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import * as ts from 'typescript/unstable/ast';
 import { streamChat } from '../src/lib/chat.js';
+import {
+  closeSourceAst,
+  findNodes,
+  hasJsxAncestorWithStaticClassToken,
+  isIdentifier,
+  isJsxElementNamed,
+  jsxAttributeExpression,
+  jsxStaticAttribute,
+  sourceFile,
+  unwrapExpression
+} from './sourceAst.js';
 
 async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
+}
+
+function chatWindowAst(): ts.SourceFile {
+  return sourceFile('src/components/ChatWindow.tsx');
+}
+
+test.after(closeSourceAst);
+
+function isButton(node: ts.Node): node is ts.JsxElement {
+  return isJsxElementNamed(node, 'button');
+}
+
+function isProperty(expression: ts.Expression, owner: string, property: string): boolean {
+  const current = unwrapExpression(expression);
+  return (
+    ts.isPropertyAccessExpression(current)
+    && current.name.text === property
+    && isIdentifier(current.expression, owner)
+  );
+}
+
+function isAttachmentRemovalLabel(expression: ts.Expression): boolean {
+  const current = unwrapExpression(expression);
+  return (
+    ts.isTemplateExpression(current)
+    && current.head.text.startsWith('移除附件')
+    && current.templateSpans.some((span) => isProperty(span.expression, 'attachment', 'name'))
+  );
+}
+
+function callsNamed(root: ts.Node, name: string): ts.CallExpression[] {
+  return findNodes(root, (node): node is ts.CallExpression => (
+    ts.isCallExpression(node) && isIdentifier(node.expression, name)
+  ));
 }
 
 function streamResponse(events: string): Response {
@@ -130,18 +176,50 @@ test('failed and stopped assistant messages expose a local retry action', async 
   assert.match(chat, /onRetry=\{onRetry\}/);
 });
 
-test('ChatWindow exposes bounded text and binary document attachments', async () => {
+test('ChatWindow exposes an accessible attachment picker', async () => {
+  const chat = await readSource('../src/components/ChatWindow.tsx');
+
+  assert.match(chat, /aria-label="添加附件"/);
+  assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
+});
+
+test('ChatWindow renders a dynamic attachment removal button inside the attachment chip', async () => {
+  const sourceFile = chatWindowAst();
+  const removeButtons = findNodes(sourceFile, isButton).filter((button) => {
+    const label = jsxAttributeExpression(button, 'aria-label');
+    return Boolean(label && isAttachmentRemovalLabel(label));
+  });
+  assert.equal(removeButtons.length, 1);
+  const removeButton = removeButtons[0];
+  assert.ok(removeButton);
+
+  const disabled = jsxAttributeExpression(removeButton, 'disabled');
+  const onClick = jsxAttributeExpression(removeButton, 'onClick');
+  const title = jsxAttributeExpression(removeButton, 'title');
+  assert.ok(hasJsxAncestorWithStaticClassToken(removeButton, 'attachment-chip'));
+  assert.ok(disabled && isIdentifier(disabled, 'streaming'));
+  assert.ok(onClick);
+  assert.ok(title && isAttachmentRemovalLabel(title));
+  const removeHandler = unwrapExpression(onClick);
+  assert.ok(ts.isArrowFunction(removeHandler) && ts.isBlock(removeHandler.body));
+  assert.ok(callsNamed(removeHandler.body, 'setAttachment').some((call) => (
+    call.arguments[0]?.kind === ts.SyntaxKind.NullKeyword
+  )));
+  assert.ok(callsNamed(removeHandler.body, 'setAttachmentAnnouncement').some((call) => (
+    Boolean(call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text === '')
+  )));
+  assert.equal(jsxStaticAttribute(removeButton, 'type'), 'button');
+});
+
+test('ChatWindow preserves bounded text and binary attachment ingestion', async () => {
   const [chat, attachment] = await Promise.all([
     readSource('../src/components/ChatWindow.tsx'),
     readSource('../src/lib/attachments.ts')
   ]);
 
-  assert.match(chat, /添加文本附件/);
-  assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
   assert.match(chat, /normalizeTextAttachment\(file\.name, await file\.text\(\)\)/);
   assert.match(chat, /toChatDocument\(attachment\)/);
   assert.match(chat, /ingestBinaryAttachment\(file\)/);
-  assert.match(chat, /历史文本附件会按问题在浏览器本地召回相关片段/);
   assert.match(attachment, /MAX_ATTACHMENT_CHARS = 3500/);
   assert.match(attachment, /ALLOWED_ATTACHMENT_EXTENSIONS/);
   assert.match(attachment, /api\/documents\/ingest/);
