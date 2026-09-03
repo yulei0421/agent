@@ -1,6 +1,6 @@
 # DeepSeek 金融 AI Agent Demo
 
-一个用于学习和验证 AI Agent 工程模式的金融研究 Demo。项目以 React 金融工作台为界面，通过 NestJS 服务调用 DeepSeek 兼容 API，并把天气、新闻、资产搜索、市场报价、固定窗口技术指标和经济日历统一为模型可选择的受控工具。
+一个用于学习和验证 AI Agent 工程模式的金融研究 Demo。项目提供 React Web 界面和 Electron 桌面客户端，通过 NestJS 服务调用 DeepSeek 兼容 API，并把天气、新闻、资产搜索、市场报价、固定窗口技术指标和经济日历统一为模型可选择的受控工具。
 
 它关注的是流式对话、工具调用、外部数据边界和本地会话体验，而不是交易执行系统。所有市场信息均应在工具查询后才进入对话或研究结果。
 
@@ -9,6 +9,7 @@
 | 层级 | 技术 | 职责 |
 | --- | --- | --- |
 | 前端 | React 19 + Vite 7 | 对话、金融工作台、资产选择和工具结果展示。 |
+| 桌面端 | Electron 44 + electron-builder 26 | 启动本地 NestJS sidecar，并构建 macOS、Windows、Linux 客户端。 |
 | 本地数据 | IndexedDB | 保存本地用户、会话（含有限工作记忆）、消息和离线待重试队列。 |
 | 实时通信 | SSE + WebSocket | 流式回答与工具事件；连接状态、心跳和重连。 |
 | 服务端 | Node.js + NestJS 11 | 分层 API、SSE、WebSocket、模型适配、受控工具与资产搜索。 |
@@ -76,7 +77,7 @@
 ## 系统架构
 
 ```text
-┌──────────────────────────────── Browser ────────────────────────────────┐
+┌──────────────────────── Browser / Electron Renderer ────────────────────┐
 │ React UI                                                                  │
 │  ├─ 对话、Markdown 与工具结果卡片                                         │
 │  ├─ 金融工作台与资产搜索                                                   │
@@ -205,11 +206,42 @@ pnpm client
 | `BROWSER_ALLOWED_DOMAINS` | 否 | 空（全部拒绝） | 浏览器沙箱允许访问的公共 DNS 域名，逗号分隔；禁止内网、回环、带凭据和非 80/443 端口地址。 |
 | `EMBEDDING_API_KEY` / `EMBEDDING_ENDPOINT` / `EMBEDDING_MODEL` | 否 | 本地确定性向量 | 三项同时配置时启用 OpenAI 兼容 Embedding 服务；请求级检索失败会回退到本地向量。 |
 
-## 服务接口与事件
+## Electron 桌面客户端
 
-## 桌面端可行性
+Electron 主进程会选择随机回环端口、生成一次性 session token、启动编译后的 NestJS sidecar，并在健康检查通过后加载同源的 Vite 页面。Renderer 保持 `contextIsolation=true`、`nodeIntegration=false` 和沙箱模式；本地 API 需要主进程注入的 session token，网页代码无法读取该令牌。
 
-Electron 桌面端由主进程启动 Nest sidecar，等待健康检查后加载 Vite 构建产物；React、IndexedDB、SSE、WebSocket、PDF/OCR、Playwright 和 LangGraph 业务无需重写。桌面端不会把 API Key 打进安装包：sidecar 会按以下优先级读取配置——继承的进程环境变量、`AGENT_ENV_FILE` 指定的文件、用户数据目录 `.env`、开发目录 `.env`。
+### 桌面开发
+
+```bash
+pnpm install
+pnpm desktop:dev
+```
+
+该命令同时启动 Vite、NestJS、Electron 编译监听和桌面窗口。开发模式仍从项目根目录 `.env` 读取模型配置。
+
+### 构建安装包
+
+```bash
+pnpm desktop:build
+```
+
+构建过程依次生成 Vite renderer、NestJS sidecar 和 Electron 主进程产物，再交给 electron-builder。产物写入 `release/`：
+
+- macOS：DMG 和 ZIP；当前 macOS arm64 环境生成 `DeepSeek Agent-0.1.0-arm64.dmg` 与 `DeepSeek Agent-0.1.0-arm64-mac.zip`。
+- Windows：NSIS 安装包。
+- Linux：AppImage。
+
+带原生依赖的 Windows/Linux 安装包应在对应操作系统或 CI runner 上构建。未配置 Apple Developer 证书时，macOS 本地构建会跳过签名与公证，只适合开发和内部验证。
+
+### 桌面模型配置
+
+桌面安装包不会包含真实 API Key。sidecar 按以下顺序使用配置：
+
+1. 启动进程继承的环境变量。
+2. `AGENT_ENV_FILE` 指定的配置文件。
+3. Electron 实际用户数据目录中的 `.env`。
+4. 兼容的 `DeepSeek Agent/.env` 品牌目录。
+5. 开发目录中的 `.env`。
 
 首次使用已安装客户端时，请在 Electron 实际用户数据目录创建 `.env` 并填写 `DEEPSEEK_API_KEY`：
 
@@ -217,7 +249,29 @@ Electron 桌面端由主进程启动 Nest sidecar，等待健康检查后加载 
 - Windows：`%APPDATA%/deepseek-agent-demo/.env`
 - Linux：`~/.config/deepseek-agent-demo/.env`
 
-桌面端也兼容 `DeepSeek Agent/.env` 品牌目录和开发目录 `.env`。还可以通过 `AGENT_ENV_FILE` 指定其它配置文件路径；路径不存在时客户端会直接显示配置错误。不要把真实 API Key 放入安装包或提交到 Git。
+最小配置示例：
+
+```env
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+不要给值添加引号，也不要把真实 API Key 写入安装包或提交到 Git。修改配置后需要完全退出并重新打开客户端。
+
+### `model_unavailable` 排查
+
+`model_unavailable` 表示默认模型、专用模型路由或备用模型在产生首个可见事件前不可用。按以下顺序检查：
+
+1. 确认已经安装最新构建，并完全退出旧客户端进程。
+2. 确认 `.env` 位于上述实际用户数据目录，包含非占位的 `DEEPSEEK_API_KEY`。
+3. 确认 `DEEPSEEK_BASE_URL` 是不带路径的 HTTP(S) origin，模型名称已对当前账户开放。
+4. 查看 `/api/ready`：`not_configured` 表示凭证未加载，`circuit_open` 表示连续上游失败后熔断，默认冷却 30 秒。
+5. 使用 `pnpm server` 从项目目录启动服务，可在终端看到本地地址并独立验证同一份模型配置。
+
+当前 macOS arm64 安装包已经通过真实 sidecar 启动、`/api/ready` 和流式模型回答验证。
+
+## 服务接口与事件
 
 | 方法与路径 | 用途 | 返回 |
 | --- | --- | --- |
@@ -386,6 +440,11 @@ GitHub Actions CI 在推送和拉取请求中依次运行类型检查、完整�
 │   ├── App.tsx                    # 应用状态、会话、离线队列和金融上下文
 │   ├── components/                # 登录、侧栏、对话、消息与金融工作台
 │   └── lib/                       # SSE、WebSocket、IndexedDB、历史与资产搜索客户端
+├── electron/
+│   ├── main.ts                    # 桌面主进程、窗口安全策略和 sidecar 生命周期
+│   ├── preload.ts                 # Renderer 可见的最小桌面 API
+│   ├── sidecar.ts                 # 随机端口、session token、健康检查和子进程管理
+│   └── environment.ts             # 桌面模型配置文件路径解析
 ├── server/
 │   ├── main.ts                    # 唯一运行时入口、Nest 应用与 WebSocket 装配
 │   ├── api/                       # Nest 控制器：健康检查、聊天 SSE、能力、任务、文档、市场搜索与报告下载
@@ -404,7 +463,9 @@ GitHub Actions CI 在推送和拉取请求中依次运行类型检查、完整�
 │   ├── agent-events.ts             # SSE 计划和子 Agent 事件共享契约
 │   ├── document.ts                 # 文档摘要、来源类型和 OCR 元数据契约
 │   └── research-citations.ts       # 工具结果引用账本
-├── scripts/smoke.ts                # 可选的已部署健康检查
+├── scripts/
+│   ├── smoke.ts                    # 可选的已部署健康检查
+│   └── build-electron-package.ts   # 复制 Electron CommonJS package scope
 ├── .github/workflows/ci.yml        # 类型检查、测试和构建的 CI
 ├── tests/                         # Node 内置测试运行器的覆盖用例
 ├── .env.example                   # 可提交的环境变量模板
@@ -423,6 +484,12 @@ pnpm typecheck
 # 构建 Vite 前端产物
 pnpm build
 
+# 启动 Electron 开发环境
+pnpm desktop:dev
+
+# 构建当前操作系统的 Electron 安装包
+pnpm desktop:build
+
 # 无网络模拟性能基线（已包含在完整测试集中）
 pnpm exec tsx --test tests/performanceBaseline.test.ts
 
@@ -436,13 +503,13 @@ SMOKE_BASE_URL=https://example.com pnpm test:smoke
 pnpm typecheck && pnpm test && pnpm build && pnpm test:smoke && git diff --check
 ```
 
-测试覆盖 Agent 规划与可见计划、能力清单、任务级模型路由、子 Agent 预算、文档摘要校验、PDF/图片 OCR、请求级向量召回、本地工作记忆与文档召回、临时任务取消/过期、并行顺序、失败/陈旧收敛、DeepSeek 流、SSE 解析、六个 ToolManifest、技术指标、经济日历、工具遥测、研究报告解析与 PDF/PPTX 导出、无网络性能基线、资产搜索、行情网关、历史记录、离线队列、金融工作台和界面样式等关键行为。
+测试覆盖 Agent 规划与可见计划、能力清单、任务级模型路由、子 Agent 预算、文档摘要校验、PDF/图片 OCR、请求级向量召回、本地工作记忆与文档召回、临时任务取消/过期、并行顺序、失败/陈旧收敛、DeepSeek 流、SSE 解析、六个 ToolManifest、技术指标、经济日历、工具遥测、研究报告解析与 PDF/PPTX 导出、Electron sidecar/session token/环境配置、无网络性能基线、资产搜索、行情网关、历史记录、离线队列、金融工作台和界面样式等关键行为。
 
 ## 限制与免责声明
 
 - 本项目是学习与演示用途的金融 AI Agent，不构成投资、交易、法律或税务建议。
 - 不提供账户体系、订单管理、资金划转、下单或自动交易能力。
 - 不提供服务端持久化记忆、跨设备会话、向量数据库或持久化索引；文档上传后的向量召回仅在当前请求内运行，前端工作记忆和历史附件仍保存在当前浏览器 IndexedDB/运行时，图状态、人工审批等待和临时任务仅存活于当前请求/进程，服务重启或 SSE 断开后无法恢复。
-- 当前计划和子 Agent 协作状态都是本次请求内的可见快照，不支持用户编辑计划、后台运行、定时触发或跨设备恢复。
+- 当前计划和子 Agent 协作状态都是本次请求内的可见快照，不支持用户编辑计划、定时触发或跨设备恢复。后台任务只保存在当前服务进程内，重启后不会恢复。
 - 外部数据源可能延迟、缺失、限流、变更或不可用；结果应以供应商实际返回的来源和时间元数据为准。
 - 生产使用前，应独立评估模型供应商、新闻和市场数据的授权、服务条款、隐私、审计、监控、容量与合规要求。
