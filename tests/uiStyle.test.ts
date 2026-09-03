@@ -1,21 +1,282 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript/unstable/ast';
+import { API, type Snapshot } from 'typescript/unstable/sync';
+
+const projectRoot = fileURLToPath(new URL('../', import.meta.url));
+const tsconfigPath = fileURLToPath(new URL('../tsconfig.json', import.meta.url));
+const chatWindowPath = fileURLToPath(new URL('../src/components/ChatWindow.tsx', import.meta.url));
+let astApi: API | undefined;
+let astSnapshot: Snapshot | undefined;
 
 async function readSource(path: string) {
   return readFile(new URL(path, import.meta.url), 'utf8');
 }
+
+function chatWindowAst(): ts.SourceFile {
+  astApi ??= new API({ cwd: projectRoot });
+  astSnapshot ??= astApi.updateSnapshot({ openProjects: [tsconfigPath] });
+  const project = astSnapshot.getProject(tsconfigPath) ?? astSnapshot.getProjects()[0];
+  assert.ok(project, 'expected the TypeScript project to load');
+  const sourceFile = project.program.getSourceFile(chatWindowPath);
+  assert.ok(sourceFile, 'expected ChatWindow.tsx in the TypeScript project');
+  return sourceFile;
+}
+
+test.after(() => {
+  astSnapshot?.dispose();
+  astApi?.close();
+});
 
 function cssRuleBody(source: string, selector: RegExp): string {
   const flags = selector.flags.replace(/[gy]/g, '');
   return new RegExp(`${selector.source}\\s*\\{([^}]*)\\}`, flags).exec(source)?.[1] ?? '';
 }
 
-function mediaSection(source: string, query: string): string {
-  const start = source.indexOf(query);
-  if (start < 0) return '';
-  const nextMedia = source.indexOf('@media', start + query.length);
-  return source.slice(start, nextMedia < 0 ? source.length : nextMedia);
+function balancedBlock(source: string, marker: string): string {
+  const markerStart = source.indexOf(marker);
+  const blockStart = markerStart >= 0 ? source.indexOf('{', markerStart + marker.length) : -1;
+  if (blockStart < 0) return '';
+
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = blockStart; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(markerStart, index + 1);
+    }
+  }
+
+  return '';
+}
+
+function findNodes<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) => node is T): T[] {
+  const matches: T[] = [];
+  const visit = (node: ts.Node): void => {
+    if (predicate(node)) matches.push(node);
+    node.forEachChild(visit);
+  };
+  visit(root);
+  return matches;
+}
+
+function unwrapExpression(expression: ts.Expression): ts.Expression {
+  return ts.skipOuterExpressions(expression);
+}
+
+function jsxAttribute(element: ts.JsxElement, name: string): ts.JsxAttribute | undefined {
+  return element.openingElement.attributes.properties.find(
+    (property): property is ts.JsxAttribute => (
+      ts.isJsxAttribute(property)
+      && ts.isIdentifier(property.name)
+      && property.name.text === name
+    )
+  );
+}
+
+function jsxAttributeExpression(element: ts.JsxElement, name: string): ts.Expression | undefined {
+  const initializer = jsxAttribute(element, name)?.initializer;
+  return initializer && ts.isJsxExpression(initializer) && initializer.expression
+    ? initializer.expression
+    : undefined;
+}
+
+function jsxStaticAttribute(element: ts.JsxElement, name: string): string | undefined {
+  const initializer = jsxAttribute(element, name)?.initializer;
+  if (!initializer) return undefined;
+  if (ts.isStringLiteral(initializer)) return initializer.text;
+  if (ts.isJsxExpression(initializer) && initializer.expression) {
+    const expression = unwrapExpression(initializer.expression);
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text;
+  }
+  return undefined;
+}
+
+function isJsxElementNamed(node: ts.Node, name: string): node is ts.JsxElement {
+  return (
+    ts.isJsxElement(node)
+    && ts.isIdentifier(node.openingElement.tagName)
+    && node.openingElement.tagName.text === name
+  );
+}
+
+function jsxButtonBranch(expression: ts.Expression): ts.JsxElement | undefined {
+  const current = unwrapExpression(expression);
+  return isJsxElementNamed(current, 'button') ? current : undefined;
+}
+
+function isIdentifier(expression: ts.Expression, name: string): boolean {
+  const current = unwrapExpression(expression);
+  return ts.isIdentifier(current) && current.text === name;
+}
+
+function isNumericValue(expression: ts.Expression, value: number): boolean {
+  const current = unwrapExpression(expression);
+  return ts.isNumericLiteral(current) && Number(current.text) === value;
+}
+
+function isStringValue(expression: ts.Expression, value: string): boolean {
+  const current = unwrapExpression(expression);
+  return (
+    (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
+    && current.text === value
+  );
+}
+
+function isProperty(expression: ts.Expression, owner: string, property: string): boolean {
+  const current = unwrapExpression(expression);
+  return (
+    ts.isPropertyAccessExpression(current)
+    && current.name.text === property
+    && isIdentifier(current.expression, owner)
+  );
+}
+
+function topLevelAssignment(statement: ts.Statement): ts.BinaryExpression | undefined {
+  if (!ts.isExpressionStatement(statement)) return undefined;
+  const expression = unwrapExpression(statement.expression);
+  return (
+    ts.isBinaryExpression(expression)
+    && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  )
+    ? expression
+    : undefined;
+}
+
+function isStyleProperty(expression: ts.Expression, owner: string, property: string): boolean {
+  const current = unwrapExpression(expression);
+  return (
+    ts.isPropertyAccessExpression(current)
+    && current.name.text === property
+    && ts.isPropertyAccessExpression(current.expression)
+    && current.expression.name.text === 'style'
+    && isIdentifier(current.expression.expression, owner)
+  );
+}
+
+function isHeightCalculation(expression: ts.Expression, textareaName: string): boolean {
+  const current = unwrapExpression(expression);
+  if (!ts.isTemplateExpression(current)) return false;
+  return current.templateSpans.some((span) => {
+    const calculation = unwrapExpression(span.expression);
+    if (!ts.isCallExpression(calculation)) return false;
+    const callee = unwrapExpression(calculation.expression);
+    const scrollHeight = calculation.arguments[0];
+    const maximum = calculation.arguments[1];
+    return (
+      ts.isPropertyAccessExpression(callee)
+      && isIdentifier(callee.expression, 'Math')
+      && callee.name.text === 'min'
+      && Boolean(scrollHeight && isProperty(scrollHeight, textareaName, 'scrollHeight'))
+      && Boolean(maximum && isNumericValue(maximum, 200))
+      && span.literal.text.includes('px')
+    );
+  });
+}
+
+function isOverflowCalculation(expression: ts.Expression, textareaName: string): boolean {
+  const current = unwrapExpression(expression);
+  if (!ts.isConditionalExpression(current)) return false;
+  const condition = unwrapExpression(current.condition);
+  return (
+    ts.isBinaryExpression(condition)
+    && condition.operatorToken.kind === ts.SyntaxKind.GreaterThanToken
+    && isProperty(condition.left, textareaName, 'scrollHeight')
+    && isNumericValue(condition.right, 200)
+    && isStringValue(current.whenTrue, 'auto')
+    && isStringValue(current.whenFalse, 'hidden')
+  );
+}
+
+function expressionCallsTarget(
+  sourceFile: ts.SourceFile,
+  expression: ts.Expression,
+  targetName: string,
+  seen = new Set<string>()
+): boolean {
+  const current = unwrapExpression(expression);
+  if (ts.isIdentifier(current)) {
+    if (current.text === targetName) return true;
+    if (seen.has(current.text)) return false;
+    seen.add(current.text);
+    const declarations = findNodes(sourceFile, (node): node is ts.FunctionDeclaration | ts.VariableDeclaration => (
+      (ts.isFunctionDeclaration(node) && Boolean(node.name?.text === current.text))
+      || (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === current.text)
+    ));
+    return declarations.some((declaration) => {
+      if (ts.isFunctionDeclaration(declaration)) {
+        return Boolean(declaration.body && nodeCallsTarget(sourceFile, declaration.body, targetName, seen));
+      }
+      return Boolean(declaration.initializer && nodeCallsTarget(sourceFile, declaration.initializer, targetName, seen));
+    });
+  }
+  return nodeCallsTarget(sourceFile, current, targetName, seen);
+}
+
+function nodeCallsTarget(
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+  targetName: string,
+  seen: Set<string>
+): boolean {
+  return findNodes(node, ts.isCallExpression).some((call) => {
+    const callee = unwrapExpression(call.expression);
+    return ts.isIdentifier(callee)
+      && (callee.text === targetName || expressionCallsTarget(sourceFile, callee, targetName, seen));
+  });
+}
+
+function containsNegatedContentTrim(expression: ts.Expression): boolean {
+  return findNodes(expression, ts.isPrefixUnaryExpression).some((prefix) => {
+    if (prefix.operator !== ts.SyntaxKind.ExclamationToken) return false;
+    const operand = unwrapExpression(prefix.operand);
+    if (!ts.isCallExpression(operand)) return false;
+    const callee = unwrapExpression(operand.expression);
+    return (
+      ts.isPropertyAccessExpression(callee)
+      && callee.name.text === 'trim'
+      && isIdentifier(callee.expression, 'content')
+    );
+  });
 }
 
 test('ChatWindow forwards streaming state to MessageList', async () => {
@@ -89,31 +350,53 @@ test('assistant messages have top breathing room and a flat tool-source attachme
 
 test('ChatWindow renders exactly one compact toolbar without legacy composer sections', async () => {
   const source = await readSource('../src/components/ChatWindow.tsx');
-  const toolbarCount = [...source.matchAll(/className="composer-toolbar"/g)].length;
+  const sourceFile = chatWindowAst();
+  const toolbars = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    ts.isJsxElement(node) && jsxStaticAttribute(node, 'className') === 'composer-toolbar'
+  ));
 
-  assert.equal(toolbarCount, 1);
+  assert.equal(toolbars.length, 1);
   assert.doesNotMatch(source, /className="web-search-control"/);
   assert.doesNotMatch(source, /className="composer-context-note"/);
   assert.doesNotMatch(source, /className="composer-actions"/);
 });
 
 test('composer toolbar switches between stop and send button branches while streaming', async () => {
-  const source = await readSource('../src/components/ChatWindow.tsx');
-  const toolbarStart = source.indexOf('<div className="composer-toolbar"');
-  const formEnd = toolbarStart >= 0 ? source.indexOf('</form>', toolbarStart) : -1;
-  const toolbarToFormEnd = toolbarStart >= 0 && formEnd >= 0
-    ? source.slice(toolbarStart, formEnd)
-    : '';
-  const actionBranches = /\{streaming\s*\?\s*\(\s*(<button\b[\s\S]*?<\/button>)\s*\)\s*:\s*\(\s*(<button\b[\s\S]*?<\/button>)\s*\)\s*\}/.exec(toolbarToFormEnd);
-  const stopButton = actionBranches?.[1] ?? '';
-  const sendButton = actionBranches?.[2] ?? '';
+  const sourceFile = chatWindowAst();
+  const toolbars = findNodes(sourceFile, (node): node is ts.JsxElement => (
+    ts.isJsxElement(node) && jsxStaticAttribute(node, 'className') === 'composer-toolbar'
+  ));
+  assert.equal(toolbars.length, 1);
+  const toolbar = toolbars[0];
+  assert.ok(toolbar);
 
-  assert.match(stopButton, /^<button\b[^>]*aria-label="停止生成"[^>]*>/);
-  assert.match(stopButton, /^<button\b[^>]*onClick=\{onStop\}[^>]*>/);
-  assert.match(stopButton, /^<button\b[^>]*type="button"[^>]*>[\s\S]*<\/button>$/);
-  assert.match(sendButton, /^<button\b[^>]*aria-label="发送消息"[^>]*>/);
-  assert.match(sendButton, /^<button\b[^>]*type="submit"[^>]*>[\s\S]*<\/button>$/);
-  assert.match(sendButton, /^<button\b[^>]*disabled=\{attachmentLoading\s*\|\|\s*!content\.trim\(\)\}[^>]*>/);
+  const streamingConditions = findNodes(toolbar, ts.isConditionalExpression).filter(
+    (conditional) => (
+      isIdentifier(conditional.condition, 'streaming')
+      && ts.isJsxExpression(conditional.parent)
+      && conditional.parent.parent === toolbar
+    )
+  );
+  assert.equal(streamingConditions.length, 1);
+  const streamingCondition = streamingConditions[0];
+  assert.ok(streamingCondition);
+
+  const stopButton = jsxButtonBranch(streamingCondition.whenTrue);
+  const sendButton = jsxButtonBranch(streamingCondition.whenFalse);
+  assert.ok(stopButton);
+  assert.ok(sendButton);
+
+  assert.equal(jsxStaticAttribute(stopButton, 'aria-label'), '停止生成');
+  assert.equal(jsxStaticAttribute(stopButton, 'type'), 'button');
+  const stopClick = jsxAttributeExpression(stopButton, 'onClick');
+  assert.ok(stopClick && expressionCallsTarget(sourceFile, stopClick, 'onStop'));
+
+  assert.equal(jsxStaticAttribute(sendButton, 'aria-label'), '发送消息');
+  assert.equal(jsxStaticAttribute(sendButton, 'type'), 'submit');
+  const sendDisabled = jsxAttributeExpression(sendButton, 'disabled');
+  assert.ok(sendDisabled);
+  assert.ok(findNodes(sendDisabled, ts.isIdentifier).some((identifier) => identifier.text === 'attachmentLoading'));
+  assert.ok(containsNegatedContentTrim(sendDisabled));
 });
 
 test('ChatWindow textarea keeps compact rows and keyboard submission behavior', async () => {
@@ -126,10 +409,99 @@ test('ChatWindow textarea keeps compact rows and keyboard submission behavior', 
 });
 
 test('ChatWindow auto-sizes the textarea inside the content effect', async () => {
-  const source = await readSource('../src/components/ChatWindow.tsx');
-  const contentEffect = /useEffect\(\(\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[content\]\s*\);/.exec(source)?.[1] ?? '';
+  const sourceFile = chatWindowAst();
+  const contentEffects = findNodes(sourceFile, ts.isCallExpression).filter((call) => {
+    if (!isIdentifier(call.expression, 'useEffect')) return false;
+    const dependencies = call.arguments[1];
+    if (!dependencies || !ts.isArrayLiteralExpression(dependencies)) return false;
+    return dependencies.elements.some((element) => isIdentifier(element, 'content'));
+  });
+  assert.equal(contentEffects.length, 1);
+  const contentEffect = contentEffects[0];
+  assert.ok(contentEffect);
+  const callback = contentEffect.arguments[0];
+  assert.ok(callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)));
+  assert.ok(ts.isBlock(callback.body));
+  const statements = [...callback.body.statements];
 
-  assert.match(contentEffect, /const textarea = textareaRef\.current;\s*if \(!textarea\) return;\s*textarea\.style\.height = ['"]0px['"];\s*textarea\.style\.height = `\$\{Math\.min\(textarea\.scrollHeight,\s*200\)\}px`;\s*textarea\.style\.overflowY = textarea\.scrollHeight > 200 \? ['"]auto['"] : ['"]hidden['"];/);
+  let textareaName: string | undefined;
+  let declarationIndex = -1;
+  for (const [index, statement] of statements.entries()) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      const initializer = declaration.initializer;
+      if (
+        ts.isIdentifier(declaration.name)
+        && initializer
+        && ts.isPropertyAccessExpression(unwrapExpression(initializer))
+        && isProperty(initializer, 'textareaRef', 'current')
+      ) {
+        textareaName = declaration.name.text;
+        declarationIndex = index;
+      }
+    }
+  }
+  assert.ok(textareaName);
+
+  const guardIndex = statements.findIndex((statement, index) => {
+    if (index <= declarationIndex || !ts.isIfStatement(statement)) return false;
+    const condition = unwrapExpression(statement.expression);
+    const guardedStatement = ts.isBlock(statement.thenStatement)
+      ? statement.thenStatement.statements[0]
+      : statement.thenStatement;
+    const returns = ts.isReturnStatement(statement.thenStatement)
+      || (
+        ts.isBlock(statement.thenStatement)
+        && statement.thenStatement.statements.length === 1
+        && Boolean(guardedStatement && ts.isReturnStatement(guardedStatement))
+      );
+    return (
+      returns
+      && ts.isPrefixUnaryExpression(condition)
+      && condition.operator === ts.SyntaxKind.ExclamationToken
+      && isIdentifier(condition.operand, textareaName)
+    );
+  });
+
+  const resetIndex = statements.findIndex((statement, index) => {
+    if (index <= guardIndex) return false;
+    const assignment = topLevelAssignment(statement);
+    return Boolean(
+      assignment
+      && isStyleProperty(assignment.left, textareaName, 'height')
+      && isStringValue(assignment.right, '0px')
+    );
+  });
+
+  const heightIndex = statements.findIndex((statement, index) => {
+    if (index <= resetIndex) return false;
+    const assignment = topLevelAssignment(statement);
+    return Boolean(
+      assignment
+      && isStyleProperty(assignment.left, textareaName, 'height')
+      && isHeightCalculation(assignment.right, textareaName)
+    );
+  });
+
+  const overflowIndex = statements.findIndex((statement, index) => {
+    if (index <= heightIndex) return false;
+    const assignment = topLevelAssignment(statement);
+    return Boolean(
+      assignment
+      && isStyleProperty(assignment.left, textareaName, 'overflowY')
+      && isOverflowCalculation(assignment.right, textareaName)
+    );
+  });
+
+  assert.ok(declarationIndex >= 0);
+  assert.ok(guardIndex > declarationIndex);
+  assert.ok(resetIndex > guardIndex);
+  assert.ok(heightIndex > resetIndex);
+  assert.ok(overflowIndex > heightIndex);
+  assert.equal(
+    statements.slice(declarationIndex + 1, overflowIndex).some((statement) => ts.isReturnStatement(statement)),
+    false
+  );
 });
 
 test('MessageList renders variable-height messages directly and provides a new-session empty state', async () => {
@@ -175,7 +547,7 @@ test('stylesheet differentiates user and assistant message roles', async () => {
 
 test('420px media rules preserve the compact toolbar without legacy actions', async () => {
   const source = await readSource('../src/styles.css');
-  const narrowSection = mediaSection(source, '@media (max-width: 420px)');
+  const narrowSection = balancedBlock(source, '@media (max-width: 420px)');
 
   assert.match(narrowSection, /\.composer-toolbar/);
   assert.doesNotMatch(narrowSection, /\.composer-actions/);
