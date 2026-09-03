@@ -63,8 +63,9 @@ test('assistant messages have top breathing room and a flat tool-source attachme
 
 test('ChatWindow renders one compact toolbar with mutually exclusive send and stop actions', async () => {
   const source = await readSource('../src/components/ChatWindow.tsx');
+  const toolbarCount = [...source.matchAll(/className="composer-toolbar"/g)].length;
 
-  assert.match(source, /className="composer-toolbar"/);
+  assert.equal(toolbarCount, 1);
   assert.match(source, /streaming\s*\?\s*\([\s\S]*aria-label="停止生成"[\s\S]*\)\s*:\s*\([\s\S]*aria-label="发送消息"/);
   assert.doesNotMatch(source, /className="web-search-control"/);
   assert.doesNotMatch(source, /className="composer-context-note"/);
@@ -75,11 +76,11 @@ test('ChatWindow auto-sizes the textarea and keeps keyboard submission behavior'
   const source = await readSource('../src/components/ChatWindow.tsx');
   const textarea = source.match(/<textarea\b[\s\S]*?\/>/)?.[0] ?? '';
 
-  assert.match(source, /textareaRef/);
-  assert.match(source, /scrollHeight/);
-  assert.match(source, /Math\.min\([^,]+,\s*200\)/);
+  assert.match(textarea, /ref=\{textareaRef\}/);
   assert.match(textarea, /rows=\{1\}/);
   assert.match(textarea, /onKeyDown=\{\(event\)\s*=>\s*\{\s*if\s*\(\s*event\.key\s*!==\s*['\"]Enter['\"]\s*\|\|\s*event\.shiftKey\s*\|\|\s*event\.nativeEvent\.isComposing\s*\)\s*return;\s*event\.preventDefault\(\);\s*event\.currentTarget\.form\?\.requestSubmit\(\);\s*\}\}/);
+  assert.match(source, /textarea\.style\.height\s*=\s*`\$\{Math\.min\(textarea\.scrollHeight,\s*200\)\}px`/);
+  assert.match(source, /textarea\.style\.overflowY\s*=\s*textarea\.scrollHeight\s*>\s*200\s*\?\s*['"]auto['"]\s*:\s*['"]hidden['"]/);
 });
 
 test('MessageList renders variable-height messages directly and provides a new-session empty state', async () => {

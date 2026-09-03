@@ -135,10 +135,11 @@ test('ChatWindow exposes bounded text and binary document attachments', async ()
     readSource('../src/components/ChatWindow.tsx'),
     readSource('../src/lib/attachments.ts')
   ]);
+  const attachmentChip = chat.match(/<(span|div)\b[^>]*className="attachment-chip"[^>]*>[\s\S]*?<\/button>\s*<\/\1>/)?.[0] ?? '';
 
   assert.match(chat, /aria-label="添加附件"/);
-  assert.match(chat, /className="attachment-chip"/);
-  assert.match(chat, /aria-label=\{`移除附件/);
+  assert.match(attachmentChip, /className="attachment-chip"/);
+  assert.match(attachmentChip, /<button\b[\s\S]*aria-label=\{`移除附件[^`]*\$\{attachment\.name\}[^`]*`\}[\s\S]*<\/button>/);
   assert.match(chat, /accept="\.txt,\.md,\.csv,\.json/);
   assert.match(chat, /normalizeTextAttachment\(file\.name, await file\.text\(\)\)/);
   assert.match(chat, /toChatDocument\(attachment\)/);

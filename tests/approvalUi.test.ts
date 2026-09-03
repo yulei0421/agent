@@ -40,11 +40,18 @@ test('streamChat sends the review flag only when requested', async () => {
 test('the compact composer exposes review mode as a pressed tool button without changing the automatic default', async () => {
   const chatWindow = await source('../src/components/ChatWindow.tsx');
   const app = await source('../src/App.tsx');
+  const approvalLabel = /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/.exec(chatWindow);
+  const approvalButtonStart = approvalLabel ? chatWindow.lastIndexOf('<button', approvalLabel.index) : -1;
+  const approvalButtonEnd = approvalLabel ? chatWindow.indexOf('</button>', approvalLabel.index) : -1;
+  const approvalButton = approvalButtonStart >= 0 && approvalButtonEnd >= 0
+    ? chatWindow.slice(approvalButtonStart, approvalButtonEnd + '</button>'.length)
+    : '';
 
-  assert.match(chatWindow, /aria-pressed=\{approvalMode\}/);
-  assert.match(chatWindow, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
-  assert.match(chatWindow, /disabled=\{streaming\}/);
-  assert.match(chatWindow, /onReviewModeChange\(!approvalMode\)/);
+  assert.match(approvalButton, /^<button\b/);
+  assert.match(approvalButton, /aria-pressed=\{approvalMode\}/);
+  assert.match(approvalButton, /aria-label=\{approvalMode\s*\?\s*'关闭人工审批'\s*:\s*'开启人工审批'\}/);
+  assert.match(approvalButton, /disabled=\{streaming\}/);
+  assert.match(approvalButton, /onReviewModeChange\(!approvalMode\)/);
   assert.match(app, /const \[reviewMode, setReviewMode\] = useState\(false\)/);
   assert.match(app, /reviewMode/);
 });
